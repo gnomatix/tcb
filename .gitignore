@@ -28,3 +28,8 @@ desktop.ini
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# === Editor / tooling / local state — not for a public repo ===
+.vscode/
+.claude/
+.beads/
