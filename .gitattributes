@@ -28,3 +28,5 @@
 # === git-crypt: encrypt everything under dev/ (private dev notes) ===
 # Mark as binary (-text) so EOL normalization never touches the ciphertext.
 dev/** filter=git-crypt diff=git-crypt -text
+# Exception: dev/README.md stays PLAINTEXT — a public note explaining why dev/ is encrypted.
+dev/README.md !filter !diff text
