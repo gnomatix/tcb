@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "mvp_win11_desktop_app",
+  "project_id": "d22bb39e-3bb0-43fc-9363-21b1d2b5b9ea"
+}
