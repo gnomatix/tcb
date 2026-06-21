@@ -1,8 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Markdown",
+  "productName": "TCB, M.D.",
   "version": "0.1.0",
-  "identifier": "com.brettwhitty.mdview",
+  "identifier": "com.gnomatix.tcb",
+  "mainBinaryName": "tcb",
   "build": {
     "frontendDist": "../WebAssets"
   },
@@ -11,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Markdown",
+        "title": "TCB, M.D.",
         "width": 1000,
         "height": 720,
         "minWidth": 400,
