@@ -64,9 +64,46 @@ when they're on your `PATH`; everything else works with nothing installed.)
 
 ## Building from source
 
-Only needed if you're working on TCB itself — end users don't build anything. You
-need the Rust toolchain and the MSVC C++ build tools (the standard native-Windows
-build chain):
+Only needed if you're working on TCB itself — end users don't build anything.
+
+### First-time Windows setup
+
+A nicer terminal (optional but recommended):
+
+```powershell
+winget install Microsoft.WindowsTerminal
+```
+
+A package manager makes installing dev tools painless. `winget` is built into
+Windows 11; you may also want one of:
+
+```powershell
+# Chocolatey
+winget install Chocolatey.Chocolatey
+# Scoop (per-user, no admin)
+Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+```
+
+[UniGetUI](https://github.com/devolutions/unigetui) is a friendly GUI that drives
+winget / Scoop / Chocolatey from one window if you prefer not to use the CLI.
+
+Install the **Rust toolchain** (provides `cargo`). On Windows, `rustup` will guide
+you through installing the MSVC C++ build tools if they're missing:
+
+```powershell
+winget install Rustlang.Rustup
+```
+
+**Recommended:** [`mise`](https://mise.jdx.dev/) to manage toolchains/versions —
+installable straight from cargo (or via winget):
+
+```powershell
+cargo install mise          # recommended
+# or:
+winget install jdx.mise
+```
+
+### Build
 
 ```sh
 # from src-tauri/
