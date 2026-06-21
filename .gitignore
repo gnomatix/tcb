@@ -1,0 +1,24 @@
+# === Rust / Tauri build artifacts ===
+/src-tauri/target/
+# Tauri auto-generated schemas (regenerated on build)
+/src-tauri/gen/schemas/
+
+# === Node / web tooling (if added later) ===
+node_modules/
+dist/
+.vite/
+
+# === Editor / scratch artifacts ===
+# Keep .vscode/settings.json, drop captured screenshots & scratch images
+.vscode/*.png
+
+# === OS cruft ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Logs ===
+*.log
+
+# Note: .remember/ carries its own `*` .gitignore (local session-continuity
+# state is intentionally untracked).

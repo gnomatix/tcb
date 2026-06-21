@@ -1,0 +1,24 @@
+/* Rules that should only apply during native printing.
+ *
+ * This file is intentionally NOT loaded by paged.js: the only file we pass to
+ * `previewer.preview()` is `app.css`. paged.js's PrintMedia handler unwraps any
+ * `@media print { ... }` block it finds in stylesheets it processes, applying
+ * those rules unconditionally to the on-screen paginated preview — which would
+ * hide our toolbar/statusbar/version-bar while in Print View. Keeping these
+ * rules in a separate `<link media="print">` stylesheet sidesteps that path:
+ *   • Browser applies the rules only during print (via the media attribute).
+ *   • paged.js never sees them and never unwraps them.
+ *
+ * The file is loaded by `<link rel="stylesheet" href="print.css" media="print">`
+ * in `index.html`. No selectors should be wrapped in `@media print { ... }` here —
+ * the media attribute on the <link> tag already scopes everything to print. */
+
+.topbar, .statusbar, .version-bar, .print-view-header { display: none !important; }
+body { background: white !important; color: black !important; }
+.print-pages { background: white !important; padding: 0 !important; }
+.pagedjs_page { box-shadow: none !important; margin: 0 !important; }
+main { display: block !important; overflow: visible !important; }
+hr.mdview-pagebreak { border: none !important; }
+hr.mdview-pagebreak::before { display: none !important; }
+body.mode-print-view #preview { display: none !important; }
+body:not(.mode-print-view) #printView { display: none !important; }

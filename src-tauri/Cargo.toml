@@ -1,0 +1,31 @@
+[package]
+name = "mdview"
+version = "0.1.0"
+description = "Minimal high-performance cross-platform Markdown viewer"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "mdview_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+similar = "3"
+
+[profile.release]
+opt-level = "s"        # Optimise for size — wins on cold start (smaller code fits in I-cache, loads from disk faster).
+lto = true             # Link-time optimisation: cross-crate inlining, dead code elimination.
+codegen-units = 1      # Single codegen unit: best optimisation, slower compile (worth it for a release build).
+panic = "abort"        # No unwinding tables, smaller binary, marginally faster.
+strip = true           # Strip debug symbols from the final binary.
+incremental = false    # Disable incremental compilation for max optimisation.

@@ -1,0 +1,26 @@
+# Normalize line endings: store text as LF in the repo, check out native.
+* text=auto
+
+# Explicitly mark source/text types as LF in-repo for cross-platform safety.
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.lock    text eol=lf
+*.json    text eol=lf
+*.js      text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.md      text eol=lf
+*.xml     text eol=lf
+*.conf    text eol=lf
+
+# Binary assets — never normalize, never diff as text.
+*.woff2   binary
+*.woff    binary
+*.ttf     binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.icns    binary
+*.pdf     binary
