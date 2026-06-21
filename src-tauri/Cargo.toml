@@ -1,5 +1,5 @@
 [package]
-name = "mdview"
+name = "tcb"
 version = "0.1.0"
 description = "Minimal high-performance cross-platform Markdown viewer"
 edition = "2021"
