@@ -24,3 +24,7 @@
 *.ico     binary
 *.icns    binary
 *.pdf     binary
+
+# === git-crypt: encrypt everything under dev/ (private dev notes) ===
+# Mark as binary (-text) so EOL normalization never touches the ciphertext.
+dev/** filter=git-crypt diff=git-crypt -text
