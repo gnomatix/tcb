@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'            # e.g. v0.1.0 — a version tag triggers a release build
+  workflow_dispatch:
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write   # required so tauri-action can create the GitHub Release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MVP ships Windows-only. macOS/Linux rows are kept (commented) so the
+          # matrix expands later with no restructuring. Pinned ubuntu-22.04 on
+          # purpose (webkit2gtk-4.1 ABI) — do NOT use ubuntu-latest.
+          - platform: 'windows-latest'
+            args: ''
+          # - platform: 'macos-latest'
+          #   args: '--target aarch64-apple-darwin'
+          # - platform: 'macos-latest'
+          #   args: '--target x86_64-apple-darwin'
+          # - platform: 'ubuntu-22.04'
+          #   args: ''
+          # - platform: 'ubuntu-22.04-arm'   # public repos only (per Tauri docs)
+          #   args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux build deps (only when the ubuntu rows are enabled).
+      - name: install dependencies (ubuntu only)
+        if: startsWith(matrix.platform, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Frontend is static HTML/JS in WebAssets/ (frontendDist ../WebAssets) — no node build.
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri UPDATER signing key (integrity, NOT publisher identity; separate from
+          # Windows Authenticode). Generate: cargo tauri signer generate -w ~/.tauri/tcb.key
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'TCB, M.D. ${{ github.ref_name }}'
+          releaseBody: 'See the assets to download and install this version.'
+          releaseDraft: true            # review before publishing; flip to false to auto-publish
+          prerelease: false
+          args: ${{ matrix.args }}
+          # VERIFIED input name is uploadUpdaterJson (default true). NOT includeUpdaterJson.
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
