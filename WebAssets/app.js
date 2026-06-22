@@ -41,6 +41,11 @@
   const $saveBtn       = document.getElementById('saveBtn');
   const $preview       = document.getElementById('preview');
   const $editor        = document.getElementById('editor');
+  const $aboutToggle   = document.getElementById('aboutToggle');
+  const $aboutOverlay  = document.getElementById('aboutOverlay');
+  const $aboutClose    = document.getElementById('aboutClose');
+  const $aboutVersion  = document.getElementById('aboutVersion');
+  const $bmacQr        = document.getElementById('bmacQr');
 
   // ------------------------------------------------------------------
   // Markdown flavor support matrix.
@@ -748,6 +753,29 @@
   $printSize.addEventListener('change', onPrintSizeChange);
   $typesetToggle.addEventListener('change', onTypesetToggle);
   $exportPdfBtn.addEventListener('click', exportTypesetPdf);
+
+  // ------------------------------------------------------------------
+  // About dialog (app name/version + Buy Me A Coffee QR, click-to-zoom).
+  // ------------------------------------------------------------------
+  $aboutToggle.addEventListener('click', openAbout);
+  $aboutClose.addEventListener('click', closeAbout);
+  $aboutOverlay.addEventListener('click', (e) => { if (e.target === $aboutOverlay) closeAbout(); });
+  $bmacQr.addEventListener('click', () => $bmacQr.classList.toggle('zoomed'));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$aboutOverlay.hidden) closeAbout();
+  });
+
+  async function openAbout() {
+    $aboutOverlay.hidden = false;
+    try {
+      const v = await window.__TAURI__?.app?.getVersion?.();
+      if (v) { $aboutVersion.textContent = 'v' + v; $aboutVersion.hidden = false; }
+    } catch (_) { /* version line is optional */ }
+  }
+  function closeAbout() {
+    $aboutOverlay.hidden = true;
+    $bmacQr.classList.remove('zoomed');
+  }
 
   // Restore typeset preference and detect external tools on startup.
   const TYPESET_KEY = 'mdview.typeset';

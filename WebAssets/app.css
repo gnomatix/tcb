@@ -682,6 +682,53 @@ body.mode-edit #preview { display: none; }
 
 .markdown-body img { max-width: 100%; height: auto; }
 
+/* ---------- About dialog ---------- */
+.about-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.about-overlay[hidden] { display: none; }
+.about-dialog {
+  position: relative;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px 28px;
+  max-width: min(92vw, 560px);
+  max-height: 92vh;
+  overflow: auto;
+  text-align: center;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+.about-close { position: absolute; top: 8px; right: 8px; }
+.about-title { margin: 0 0 4px; font-size: 18px; }
+.about-version { margin: 0 0 12px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); }
+.about-tagline { margin: 0 0 18px; color: var(--fg-muted); }
+.about-bmac-msg { margin: 0 0 12px; }
+.about-qr {
+  width: 240px;
+  height: 240px;
+  max-width: 80vmin;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px;
+  cursor: zoom-in;
+  box-sizing: border-box;
+}
+.about-qr.zoomed {
+  width: min(90vmin, 900px);
+  height: min(90vmin, 900px);
+  max-width: none;
+  cursor: zoom-out;
+}
+.about-qr-hint { margin: 12px 0 0; font-size: 12px; color: var(--fg-muted); }
+
 /* ---------- Fallback theme via OS query (host messaging takes priority) ---------- */
 @media (prefers-color-scheme: dark) {
   body:not(.theme-light):not(.theme-dark) {

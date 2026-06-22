@@ -1,26 +1,32 @@
 # mise.toml — reproducible build toolchain for TCB, M.D. (Tauri 2)
-# Identical on Windows / macOS / Linux dev machines AND GitHub Actions (jdx/mise-action@v4).
-# Verified against mise.jdx.dev + jdx/mise registry + aquaproj/aqua-registry, and on-box
-# with mise 2026.5.15 (`mise ls-remote aqua:tauri-apps/tauri/cargo-tauri` returns 2.11.3).
+# Project-level dependency/toolchain manifest (committed). mise auto-loads it in this dir.
+# First-time use needs a one-time `mise trust` for this path (prompt devs in setup docs).
+# Env-scoped local config (e.g. license keys) goes in .mise.<env>.toml, loaded via `mise --env <env>`.
 
 [tools]
-# Rust toolchain. `rust` is a mise CORE plugin (registry: core:rust).
-# mise drives rustup under the hood: it sets RUSTUP_TOOLCHAIN and rustup auto-installs.
-# Pin an exact toolchain for reproducibility; bump deliberately.
-# NOTE: src-tauri/Cargo.toml declares rust-version = "1.77" (MSRV); pin >= that.
-rust = "1.83.0"
+# Rust toolchain. `rust` is a mise CORE plugin; mise drives rustup (sets RUSTUP_TOOLCHAIN,
+# rustup auto-installs). Pin an exact toolchain for reproducibility; bump deliberately.
+# Build deps (darling / image / plist / serde_with / time + icu, via tauri) require rustc up to 1.88.
+# src-tauri/Cargo.toml MSRV is 1.77, but the BUILD toolchain must be >= 1.88.
+rust = "1.88.0"
 
 # Tauri CLI. NOT in mise's short-name registry, so an explicit backend is required.
-# VERIFIED on-box: the 3-SEGMENT aqua spec is correct. aqua ships a prebuilt cargo-tauri
-# GitHub-release binary for linux/amd64, darwin, and windows (no compile).
-# The 2-segment form `aqua:tauri-apps/tauri` FAILS ("no aqua-registry found").
-# Pass plain semver (no `v`, no `tauri-cli-` prefix); mise applies the prefix internally.
+# 3-SEGMENT aqua spec (verified on-box). 2-segment form fails. Plain semver (no v / prefix).
 "aqua:tauri-apps/tauri/cargo-tauri" = "2.11.3"
 
-# OPTIONAL redundancy only (do NOT enable alongside the aqua line). Compiles from
-# crates.io; uses cargo-binstall prebuilts when cargo-binstall is on PATH.
+# OPTIONAL redundancy only (do NOT enable alongside the aqua line). Compiles from crates.io.
 # "cargo:tauri-cli" = "2.11.3"
 
 # Tauri ALSO needs OS packages that are NOT mise tools, provisioned separately:
 # Windows = MSVC "Desktop development with C++" + WebView2 (preinstalled Win10 1803+/Win11);
 # Linux = libwebkit2gtk-4.1-dev + friends. CI runners supply these.
+
+# Tasks — after `mise install`, one command builds the app. mise activates the pinned toolchain,
+# so cargo + cargo-tauri resolve without a separate `mise exec`.
+[tasks.build]
+description = "Build the TCB installer + standalone binary (release)"
+run = "cargo tauri build"
+
+[tasks.dev]
+description = "Run TCB live for development (debug, with reload)"
+run = "cargo tauri dev"

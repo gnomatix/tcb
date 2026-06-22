@@ -87,11 +87,13 @@ Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
 [UniGetUI](https://github.com/devolutions/unigetui) is a friendly GUI that drives
 winget / Scoop / Chocolatey from one window if you prefer not to use the CLI.
 
-Install the **Rust toolchain** (provides `cargo`). On Windows, `rustup` will guide
-you through installing the MSVC C++ build tools if they're missing:
+Install the **Rust toolchain** (provides `cargo`). On Windows you also need the
+MSVC C++ build tools (the linker Rust uses) — `rustup` will prompt to install them
+if they're missing, or install them explicitly:
 
 ```powershell
 winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools   # then add the "Desktop development with C++" workload
 ```
 
 **Recommended:** [`mise`](https://mise.jdx.dev/) to manage toolchains/versions —
@@ -105,9 +107,19 @@ winget install jdx.mise
 
 ### Build
 
-```sh
-# from src-tauri/
-cargo build --release        # produces the native tcb.exe
-# or, with the Tauri CLI, for development:
-cargo tauri dev
+```powershell
+git clone https://github.com/gnomatix/tcb
+cd tcb
+mise trust          # trust this repo's mise.toml (one time)
+mise install        # installs the pinned Rust toolchain + Tauri CLI
+mise run build      # builds the app — one command
 ```
+
+`mise run build` runs `cargo tauri build` with the pinned toolchain and produces:
+
+- `src-tauri/target/release/tcb.exe` — the standalone app binary, and
+- `src-tauri/target/release/bundle/` — the NSIS `setup.exe` and the `.msi` installer.
+
+For live development (debug build, auto-reload) use `mise run dev`. Without mise, the
+equivalent is `cargo tauri build` (or `cargo build --release` in `src-tauri/` for just
+the bare `tcb.exe`).

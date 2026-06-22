@@ -28,6 +28,7 @@
 
     <button id="versionBarToggle" class="btn-icon" title="Versions (Ctrl+H)" aria-label="Toggle version bar" aria-pressed="false">🕒</button>
     <button id="printViewToggle" class="btn-icon" title="Print View (Ctrl+Shift+P) — Ctrl+P prints" aria-label="Toggle print view" aria-pressed="false">📄</button>
+    <button id="aboutToggle" class="btn-icon" title="About TCB, M.D." aria-label="About">ℹ️</button>
     <button id="statusbarToggle" class="btn-icon" title="Toggle status bar" aria-pressed="true" aria-label="Toggle status bar">▾</button>
 
     <label class="toggle" title="Toggle edit mode (Ctrl+E)">
@@ -90,6 +91,19 @@
   <style id="printPageStyle">
     @page { size: letter; margin: 1in; }
   </style>
+
+  <div class="about-overlay" id="aboutOverlay" hidden>
+    <div class="about-dialog" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+      <button class="about-close btn-icon" id="aboutClose" aria-label="Close about">×</button>
+      <h2 class="about-title" id="aboutTitle">TCB, M.D.</h2>
+      <p class="about-version" id="aboutVersion" hidden></p>
+      <p class="about-tagline">Taking Care of Business — a fast, native Markdown viewer &amp; editor.</p>
+      <p class="about-bmac-msg">Buy me a coffee — thanks for your support! ☕</p>
+      <img class="about-qr" id="bmacQr" src="gnomatix-bmac-qr-code.png"
+           alt="Buy Me A Coffee QR code — scan to support the project" title="Click to zoom" />
+      <p class="about-qr-hint">Scan the code with your phone. Click it to zoom in.</p>
+    </div>
+  </div>
 
   <script src="vendor/markdown-it.min.js"></script>
   <script src="app.js"></script>
