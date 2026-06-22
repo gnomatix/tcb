@@ -54,7 +54,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEOUU1Njk1Mzc0QUREQTkKUldTcDNVbzNsVmFlUGFUZHhCT2NHamdXRUt0a0ZWdnFUT2NWZC9NdGFHZ0FDaHgzUUo0TWJxUDkK",
       "endpoints": [
-        "https://tcb.gnomatix.com/latest.json"
+        "https://illumignoti.gnomatix.com/latest.json"
       ],
       "windows": { "installMode": "passive" }
     }
