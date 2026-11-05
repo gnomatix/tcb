@@ -21,6 +21,11 @@ All notable changes to TCB, M.D. Versions follow semver; the Windows installer a
 - A second `tcb.exe` instance started with a relative path from another folder opened
   the wrong location; the path is now resolved against that instance's directory.
 - The `pagebreaks` badge (an HTML comment) was flagged as unsupported by every flavor.
+- Feature badges (and the Save-time flavor warning) were raised by syntax that only
+  appeared inside fenced code blocks or inline code, e.g. `$PATH` in a shell sample
+  reported `math`, `[[ ... ]]` reported `wikilinks`, a YAML `---` or `| a |` line
+  reported `tables`. Detection now ignores code, and a `<!-- pagebreak -->` marker
+  inside code stays literal text instead of becoming a page break.
 - The unsaved-changes dot was drawn even when hidden.
 - Clicking a link in the preview navigated the app's own WebView: an `https://` link
   replaced the UI with the web page and a relative `other.md` link showed a 404. Links are
