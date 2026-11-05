@@ -98,6 +98,5 @@ jobs:
             ${{ steps.sig.outputs.signing == 'true'
                 && matrix.args
                 || format('{0} --config src-tauri/tauri.unsigned.conf.json', matrix.args) }}
-          # VERIFIED input name is uploadUpdaterJson (default true). NOT includeUpdaterJson.
-          uploadUpdaterJson: ${{ steps.sig.outputs.signing == 'true' }}
+          includeUpdaterJson: ${{ steps.sig.outputs.signing == 'true' }}
           updaterJsonPreferNsis: true

@@ -64,7 +64,7 @@ jobs:
           # Without tagName/releaseId the action only builds. The unsigned overlay turns
           # off updater artifacts so the build does not need TAURI_SIGNING_PRIVATE_KEY.
           args: --config src-tauri/tauri.unsigned.conf.json
-          uploadUpdaterJson: false
+          includeUpdaterJson: false
 
       - uses: actions/upload-artifact@v4
         with:
