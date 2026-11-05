@@ -51,6 +51,25 @@ jobs:
 
       # Frontend is static HTML/JS in WebAssets/ (frontendDist ../WebAssets) — no node build.
 
+      # tauri.conf.json enables createUpdaterArtifacts with a pubkey, so the bundler
+      # ABORTS (after the full compile) when TAURI_SIGNING_PRIVATE_KEY is not set in the
+      # repository secrets. Every v0.1.x run failed in that step. Detect the secret up
+      # front: with it, build signed updater artifacts; without it, build an UNSIGNED
+      # release (installers only, no latest.json) and say so in the log and release notes.
+      - name: detect updater signing key
+        id: sig
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "signing=true" >> "$GITHUB_OUTPUT"
+            echo "Updater signing key present: building signed updater artifacts."
+          else
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Unsigned release::TAURI_SIGNING_PRIVATE_KEY secret is not set. Building installers WITHOUT updater artifacts; in-app auto-update will not pick this release up."
+          fi
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -61,10 +80,11 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'TCB, M.D. ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download and install this version.'
+          releaseBody: ${{ steps.sig.outputs.signing == 'true' && 'See the assets to download and install this version.' || 'See the assets to download and install this version. NOTE: built without the updater signing key — this release is not published to the in-app updater.' }}
           releaseDraft: true            # review before publishing; flip to false to auto-publish
           prerelease: false
-          args: ${{ matrix.args }}
+          # Unsigned fallback: merge tauri.unsigned.conf.json (createUpdaterArtifacts=false).
+          args: ${{ steps.sig.outputs.signing == 'true' && matrix.args || format('{0} --config src-tauri/tauri.unsigned.conf.json', matrix.args) }}
           # VERIFIED input name is uploadUpdaterJson (default true). NOT includeUpdaterJson.
-          uploadUpdaterJson: true
+          uploadUpdaterJson: ${{ steps.sig.outputs.signing == 'true' }}
           updaterJsonPreferNsis: true

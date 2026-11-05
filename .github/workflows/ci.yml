@@ -38,9 +38,49 @@ jobs:
         working-directory: src-tauri
         run: cargo build --locked
 
+  # Full release-profile bundle on the shipping target, uploaded as a workflow artifact.
+  # No tag, no GitHub Release, no signing: this is the "try the branch on a real
+  # Windows 11 box" build. The tag-triggered release.yml remains the official path.
+  bundle-windows:
+    name: Windows installer (unsigned, artifact only)
+    runs-on: windows-latest
+    needs: rust-windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: bundle
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Without tagName/releaseId the action only builds. The unsigned overlay turns
+          # off updater artifacts so the build does not need TAURI_SIGNING_PRIVATE_KEY.
+          args: --config src-tauri/tauri.unsigned.conf.json
+          uploadUpdaterJson: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcb-windows-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            src-tauri/target/release/tcb.exe
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+
   ui-smoke:
     name: WebAssets smoke tests (headless Chromium)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright's browser installer
+    # does not support yet ("does not support chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +91,7 @@ jobs:
       # No lockfile by design (the repo has no node build); install just Playwright.
       - name: install Playwright + Chromium
         run: |
-          npm install --no-save --no-package-lock playwright@1.50.1
+          npm install --no-save --no-package-lock playwright@^1.63
           npx playwright install --with-deps chromium
 
       - name: node --test
