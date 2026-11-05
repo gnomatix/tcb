@@ -184,6 +184,10 @@
       async copyText(text) {
         await clipboard.writeText(text);
       },
+      async openExternal(url) {
+        // Default browser / mail client. Needs `opener:default` (http, https, mailto, tel).
+        await window.__TAURI__.opener.openUrl(url);
+      },
       async renderMarkdown(text) {
         // Rust pulldown-cmark with all extensions + HTML escaping + feature detection.
         return await invoke('render_markdown', { text });
@@ -263,6 +267,9 @@
       async copyText(text) {
         if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
         else console.info('[host:mock] would copy', text);
+      },
+      async openExternal(url) {
+        window.open(url, '_blank', 'noopener');
       },
       async renderMarkdown(text) {
         return { html: md.render(text), features: [] };
@@ -483,12 +490,169 @@
       const { html, features } = await host.renderMarkdown(text || '');
       if (seq !== renderSeq) return;   // superseded
       $preview.innerHTML = html;
+      addHeadingIds($preview);
       renderFeatureBadges(features);
       await renderMathIfPresent($preview);
     } catch (err) {
       console.error('[render] failed:', err);
     }
   }
+
+  // ------------------------------------------------------------------
+  // Links inside the preview
+  //
+  // The preview is a WebView: left alone, an `https://` link replaces the whole app with
+  // the web page (no way back), a relative `other.md` 404s inside the app origin and a
+  // `#heading` anchor only works if the heading happens to carry an id. One delegated
+  // click listener on #preview always calls preventDefault() and routes the link:
+  //   #fragment        → scroll the matching heading into view
+  //   other.md         → open that file in this app (relative to the open document)
+  //   http/https/mailto→ default browser / mail client via the host
+  //   anything else    → swallowed and logged
+  // Middle-click, Ctrl/Shift/Alt/Meta-click are swallowed too (nothing happens): there is
+  // no second tab or window to open into, and letting the WebView handle them is the bug
+  // this fixes. The decision itself is the pure `classifyLink()` below (exposed for tests).
+  // ------------------------------------------------------------------
+
+  /** GitHub-style heading slug: lower-case, drop punctuation other than `-`/`_`, spaces → `-`. */
+  function slugify(text) {
+    return String(text)
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+      .replace(/\s+/g, '-');
+  }
+
+  /** Give every heading an id (slug of its text, `-1`, `-2` … on repeats) unless the
+   *  renderer already emitted one (pulldown-cmark does for `## Title {#id}`). */
+  function addHeadingIds(container) {
+    const seen = new Set();
+    for (const h of container.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+      if (h.id) { seen.add(h.id); continue; }
+      const base = slugify(h.textContent) || 'section';
+      let id = base;
+      for (let n = 1; seen.has(id); n++) id = `${base}-${n}`;
+      seen.add(id);
+      h.id = id;
+    }
+  }
+
+  /** Join a directory and a relative path, collapsing `.` / `..`, keeping the directory's
+   *  separator style (`\` on Windows paths). The root (`C:` or POSIX `/`) is never popped. */
+  function joinRelativePath(baseDir, rel) {
+    const sep = baseDir.includes('\\') ? '\\' : '/';
+    const parts = baseDir.split(/[\\/]/);
+    if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();   // "C:\" / "/"
+    for (const seg of rel.split(/[\\/]/)) {
+      if (seg === '' || seg === '.') continue;
+      if (seg === '..') { if (parts.length > 1) parts.pop(); continue; }
+      parts.push(seg);
+    }
+    return parts.join(sep);
+  }
+
+  const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+  const MARKDOWN_FILE_RE = /\.(md|markdown)$/i;
+  const SCHEME_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+  const WIN_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+
+  /**
+   * Decide what a click on `href` (as written in the Markdown) should do.
+   * Pure: no DOM, no state. Returns {kind, target[, fragment]} where kind is
+   *   'fragment' — target is the decoded fragment (no `#`)
+   *   'markdown' — target is the absolute path to open (null when no file is open, so a
+   *                relative link has nothing to resolve against); fragment is any `#…` part
+   *   'external' — target is the URL to hand to the OS
+   *   'ignore'   — target is the original href; nothing should happen
+   */
+  function classifyLink(href, currentPath) {
+    const raw = String(href ?? '').trim();
+    if (!raw) return { kind: 'ignore', target: raw };
+
+    if (raw.startsWith('#')) {
+      return { kind: 'fragment', target: safeDecode(raw.slice(1)) };
+    }
+
+    const scheme = SCHEME_RE.exec(raw);
+    if (scheme && !WIN_DRIVE_RE.test(raw)) {
+      const s = scheme[1].toLowerCase() + ':';
+      if (EXTERNAL_SCHEMES.has(s)) return { kind: 'external', target: raw };
+      return { kind: 'ignore', target: raw };           // file:, javascript:, data:, …
+    }
+    if (raw.startsWith('//')) return { kind: 'ignore', target: raw };   // protocol-relative URL
+
+    const hashAt = raw.indexOf('#');
+    const fragment = hashAt >= 0 ? safeDecode(raw.slice(hashAt + 1)) : null;
+    let filePart = hashAt >= 0 ? raw.slice(0, hashAt) : raw;
+    const queryAt = filePart.indexOf('?');
+    if (queryAt >= 0) filePart = filePart.slice(0, queryAt);
+    filePart = safeDecode(filePart);
+    if (!MARKDOWN_FILE_RE.test(filePart)) return { kind: 'ignore', target: raw };
+
+    const absolute = WIN_DRIVE_RE.test(filePart) || /^[\\/]/.test(filePart);
+    if (absolute) return { kind: 'markdown', target: filePart, fragment };
+    if (!currentPath) return { kind: 'markdown', target: null, fragment };
+    return { kind: 'markdown', target: joinRelativePath(parentDir(currentPath), filePart), fragment };
+  }
+
+  function safeDecode(s) {
+    try { return decodeURIComponent(s); } catch (_) { return s; }
+  }
+
+  function scrollToFragment(fragment) {
+    if (!fragment) return false;
+    const want = slugify(fragment);
+    let el = null;
+    for (const h of $preview.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+      if (h.id === fragment || h.id === want || slugify(h.textContent) === want) { el = h; break; }
+    }
+    if (!el) {
+      console.info('[link] no heading matches', '#' + fragment);
+      return false;
+    }
+    el.scrollIntoView({ block: 'start' });
+    return true;
+  }
+
+  async function followPreviewLink(href) {
+    const link = classifyLink(href, state.path);
+    switch (link.kind) {
+      case 'fragment':
+        scrollToFragment(link.target);
+        return;
+      case 'markdown':
+        if (!link.target) {
+          console.info('[link] no file open; cannot resolve relative link', href);
+          return;
+        }
+        await openPathGuarded(link.target);
+        if (link.fragment && state.path === link.target) scrollToFragment(link.fragment);
+        return;
+      case 'external':
+        try {
+          await host.openExternal(link.target);
+        } catch (err) {
+          console.error('[link] open external failed:', err);
+        }
+        return;
+      default:
+        console.info('[link] ignored', href);
+    }
+  }
+
+  function onPreviewClick(e) {
+    const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+    if (!a || !$preview.contains(a)) return;
+    e.preventDefault();                       // the WebView itself must never navigate
+    if (e.type !== 'click' || e.button !== 0) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    followPreviewLink(a.getAttribute('href'));
+  }
+  $preview.addEventListener('click', onPreviewClick);
+  $preview.addEventListener('auxclick', onPreviewClick);   // middle button fires auxclick, not click
+
+  // Test hook: the pure routing decision, callable from the Playwright suite.
+  window.tcbLinks = Object.freeze({ classifyLink, slugify, joinRelativePath });
 
   // ----- KaTeX (lazy-loaded; runs over .math.math-inline / .math-display spans
   //       produced by pulldown-cmark's ENABLE_MATH) -----

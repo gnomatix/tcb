@@ -53,14 +53,16 @@ afterEach(async () => {
   );
 });
 
-/** Open a fresh page, load index.html and wait for the initial welcome render. */
-async function openPage() {
+/** Open a fresh page, load index.html and wait for the initial welcome render.
+ *  `initScript` (optional) runs in the page before any of its own scripts, e.g. to stub a browser API. */
+async function openPage({ initScript } = {}) {
   pageErrors = [];
   consoleMessages = [];
   page = await browser.newPage();
   page.on('pageerror', (err) => pageErrors.push(err));
   page.on('console', (msg) => consoleMessages.push(msg.text()));
   page.on('dialog', (d) => d.dismiss());
+  if (initScript) await page.addInitScript(initScript);
   await page.goto(`${baseUrl}/index.html`);
   await page.waitForFunction(
     () => (document.querySelector('#preview h1')?.textContent || '').includes('Welcome'),
@@ -120,6 +122,27 @@ async function assertDirtyDot(shouldShow, label) {
 async function enterEditModeViaLabel() {
   await page.locator('label.toggle').click();
   await page.waitForFunction(() => document.body.classList.contains('mode-edit'));
+}
+
+/** Put `markdown` in the editor (fires `input`), flip to view mode and wait for the
+ *  preview to contain `readySelector` (the render is async). */
+async function renderDocument(markdown, readySelector) {
+  await enterEditModeViaLabel();
+  await page.locator('#editor').fill(markdown);
+  await page.locator('label.toggle').click();
+  await page.waitForFunction(() => document.body.classList.contains('mode-view'));
+  await page.waitForSelector(`#preview ${readySelector}`, { timeout: 3000 });
+}
+
+/** Is `el` (by selector) inside the visible box of the #preview scroll container? */
+async function isInPreviewViewport(selector) {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return false;
+    const box = document.getElementById('preview').getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.top >= box.top - 1 && r.top < box.bottom;
+  }, selector);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,4 +338,104 @@ test('i. Print View paginates with paged.js and closes via the × button', async
 
   await page.locator('#printViewClose').click();
   assert.equal(await bodyHasClass('mode-print-view'), false, 'body should drop mode-print-view after close');
+});
+
+// ---------------------------------------------------------------------------
+// Links in the preview (app.js classifyLink / onPreviewClick)
+
+test('j. an https link in the preview goes to the host (window.open in mock) and never navigates the page', async () => {
+  await openPage({
+    // Stub window.open before app.js loads so the mock host's openExternal() is recorded, not executed.
+    initScript: () => {
+      window.__openCalls = [];
+      window.open = (...args) => { window.__openCalls.push(args); return null; };
+    },
+  });
+  const urlBefore = page.url();
+
+  await renderDocument('Visit [the site](https://example.com/page?x=1) now.\n', 'a[href^="https://example.com"]');
+  await page.locator('#preview a[href^="https://example.com"]').click();
+
+  assert.equal(page.url(), urlBefore, 'clicking an external link must not navigate the WebView');
+  assert.deepEqual(
+    await page.evaluate(() => window.__openCalls),
+    [['https://example.com/page?x=1', '_blank', 'noopener']],
+    'mock host hands the URL to window.open exactly once',
+  );
+
+  // Middle-click and Ctrl-click are swallowed: no navigation, no second open() call, no popup.
+  const popups = [];
+  page.on('popup', (p) => popups.push(p));
+  await page.locator('#preview a[href^="https://example.com"]').click({ button: 'middle' });
+  await page.locator('#preview a[href^="https://example.com"]').click({ modifiers: ['Control'] });
+  await page.waitForTimeout(200);
+  assert.equal(page.url(), urlBefore, 'modifier clicks must not navigate either');
+  assert.equal((await page.evaluate(() => window.__openCalls)).length, 1, 'modifier clicks do not open anything');
+  assert.deepEqual(popups, [], 'no popup window was opened');
+});
+
+test('k. headings get GitHub-style ids and a #fragment link scrolls the heading into view', async () => {
+  await openPage();
+  const urlBefore = page.url();
+
+  const filler = Array.from({ length: 80 }, (_, i) => `Paragraph ${i + 1} of filler text.`).join('\n\n');
+  const doc = `# First heading\n\n[go](#second-heading)\n\n${filler}\n\n## Second Heading!\n\nThe end.\n`;
+  await renderDocument(doc, 'a[href="#second-heading"]');
+
+  assert.equal(await page.locator('#preview h1').getAttribute('id'), 'first-heading', 'h1 gets a slug id');
+  assert.equal(await page.locator('#preview h2').getAttribute('id'), 'second-heading', 'h2 slug drops punctuation');
+  assert.equal(await isInPreviewViewport('#preview h2'), false, 'precondition: second heading starts out of view');
+
+  await page.locator('#preview a[href="#second-heading"]').click();
+
+  assert.equal(await isInPreviewViewport('#second-heading'), true, 'second heading scrolled into view');
+  assert.equal(await page.evaluate(() => document.getElementById('preview').scrollTop > 0), true, '#preview itself scrolled');
+  assert.equal(page.url(), urlBefore, 'fragment navigation stays inside the app (no URL hash change)');
+});
+
+test('l. a relative .md link with no file open is swallowed and logged, not navigated', async () => {
+  await openPage();
+  const urlBefore = page.url();
+
+  await renderDocument('See [the other file](other.md) and [an image](pic.png).\n', 'a[href="other.md"]');
+  await page.locator('#preview a[href="other.md"]').click();
+  await waitForConsole('[link] no file open');
+
+  await page.locator('#preview a[href="pic.png"]').click();
+  await waitForConsole('[link] ignored');
+
+  assert.equal(page.url(), urlBefore, 'relative links must not navigate the WebView');
+  assert.ok((await page.locator('#docTitle').textContent()).startsWith('untitled.md'), 'no other file was opened');
+  assert.match(await page.locator('#editor').inputValue(), /\(other\.md\)/, 'document content untouched (still dirty, unsaved)');
+  assert.equal(await page.locator('#preview a[href="other.md"]').count(), 1, 'preview still shows the document');
+});
+
+test('m. classifyLink routes hrefs by kind and resolves relative .md paths against the open file', async () => {
+  await openPage();
+  const classify = (href, cur) => page.evaluate(([h, c]) => window.tcbLinks.classifyLink(h, c), [href, cur]);
+  const WIN = 'C:\\docs\\guide\\index.md';
+  const NIX = '/home/me/docs/index.md';
+
+  assert.deepEqual(await classify('#Some%20Heading', WIN), { kind: 'fragment', target: 'Some Heading' });
+  assert.deepEqual(await classify('https://example.com/a', WIN), { kind: 'external', target: 'https://example.com/a' });
+  assert.deepEqual(await classify('HTTP://example.com', null), { kind: 'external', target: 'HTTP://example.com' });
+  assert.deepEqual(await classify('mailto:me@example.com', null), { kind: 'external', target: 'mailto:me@example.com' });
+  assert.equal((await classify('file:///C:/x.md', WIN)).kind, 'ignore', 'file: is not opened');
+  assert.equal((await classify('javascript:alert(1)', WIN)).kind, 'ignore');
+  assert.equal((await classify('//cdn.example.com/x.md', WIN)).kind, 'ignore', 'protocol-relative URL');
+  assert.equal((await classify('pic.png', WIN)).kind, 'ignore', 'non-markdown relative file');
+  assert.equal((await classify('', WIN)).kind, 'ignore');
+
+  assert.deepEqual(await classify('other.md', WIN), { kind: 'markdown', target: 'C:\\docs\\guide\\other.md', fragment: null });
+  assert.deepEqual(
+    await classify('../notes/My%20Notes.markdown#intro', WIN),
+    { kind: 'markdown', target: 'C:\\docs\\notes\\My Notes.markdown', fragment: 'intro' },
+  );
+  assert.deepEqual(await classify('./sub/x.MD', NIX), { kind: 'markdown', target: '/home/me/docs/sub/x.MD', fragment: null });
+  assert.equal((await classify('../../../../x.md', 'C:\\a.md')).target, 'C:\\x.md', '.. never climbs above the drive root');
+  assert.equal((await classify('../../x.md', '/a.md')).target, '/x.md', '.. never climbs above the POSIX root');
+  assert.deepEqual(await classify('D:\\else\\x.md', WIN), { kind: 'markdown', target: 'D:\\else\\x.md', fragment: null }, 'drive path is not a scheme');
+  assert.deepEqual(await classify('other.md', null), { kind: 'markdown', target: null, fragment: null }, 'no file open → nothing to resolve against');
+
+  assert.equal(await page.evaluate(() => window.tcbLinks.slugify('  Hello, World! (v2.0) ')), 'hello-world-v20');
 });
