@@ -120,7 +120,13 @@
           try {
             await currentWindow.onCloseRequested(async (event) => {
               let proceed = true;
-              try { proceed = await onCloseRequested(); } catch (err) { console.error('[close] guard failed:', err); }
+              try {
+                proceed = await onCloseRequested();
+              } catch (err) {
+                console.error('[close] guard failed:', err);
+                // Dialog plugin unavailable: never discard edits silently.
+                proceed = !state.isDirty || window.confirm('You have unsaved changes. Close without saving?');
+              }
               if (!proceed) event.preventDefault();
             });
           } catch (err) {
@@ -129,12 +135,15 @@
         }
         // Load the launch file BEFORE showing the window (no blank flash), but report a
         // failure only AFTER it is visible — a modal alert on a hidden window looks hung.
+        let launch = null;
         let launchError = null;
         try {
-          const launch = await invoke('get_launch_file');
-          if (launch) await onOpen(launch);
+          launch = await invoke('get_launch_file');
         } catch (err) {
           launchError = err;
+        }
+        if (launch) {
+          try { await onOpen(launch); } catch (err) { console.error('[host:init] applying launch file failed:', err); }
         }
         await invoke('frontend_ready');
         if (launchError) onOpenError(launchError);
@@ -706,10 +715,17 @@
     if (next !== zoomLevel) applyZoom(next);
   }
 
+  // Precision touchpads / pinch deliver many small deltas per gesture; accumulate
+  // and step once per ~50 units so one pinch is one zoom step, not five.
+  let wheelAccum = 0;
   document.addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    if (e.deltaY !== 0) stepZoom(e.deltaY < 0 ? 1 : -1);
+    wheelAccum += e.deltaY;
+    if (Math.abs(wheelAccum) >= 50) {
+      stepZoom(wheelAccum < 0 ? 1 : -1);
+      wheelAccum = 0;
+    }
   }, { passive: false });
 
   async function copyParentToClipboard() {
@@ -745,13 +761,14 @@
   document.addEventListener('keydown', (e) => {
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
-    if (ctrl && (e.key === '=' || e.key === '+')) {
+    // AltGr reports ctrlKey on Windows; exclude it so AltGr-typed =/+/-/0 still insert text.
+    if (ctrl && !e.altKey && (e.key === '=' || e.key === '+')) {
       e.preventDefault();
       stepZoom(1);
-    } else if (ctrl && (e.key === '-' || e.key === '_')) {
+    } else if (ctrl && !e.altKey && (e.key === '-' || e.key === '_')) {
       e.preventDefault();
       stepZoom(-1);
-    } else if (ctrl && !e.shiftKey && e.key === '0') {
+    } else if (ctrl && !e.altKey && !e.shiftKey && e.key === '0') {
       e.preventDefault();
       applyZoom(1);
     } else if (ctrl && !e.shiftKey && key === 's') {
@@ -888,6 +905,9 @@
         versionContentCache[id] = content;
       }
       const diffStr = await host.diffText(content, $editor.value);
+      // The diff owns the preview now: drop any pending/in-flight live render.
+      cancelScheduledRender();
+      renderSeq++;
       $preview.innerHTML = renderDiff(diffStr);
       const v = versionsCache.find((x) => x.id === id);
       if (v) {

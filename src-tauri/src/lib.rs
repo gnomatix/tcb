@@ -192,9 +192,7 @@ fn snapshot_read_impl(app: &AppHandle, path: &Path, id: &str) -> Result<String, 
     let file = dir.join(format!("{}.md", id));
     let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
     // Snapshots written by older builds may carry a BOM / CRLF; normalize like a load.
-    Ok(textfile::decode(&bytes)
-        .map(|d| d.text)
-        .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned()))
+    textfile::decode(&bytes).map(|d| d.text)
 }
 
 /// Produce a unified text diff between two strings. `similar` 3.x returns `&mut Self`
@@ -473,7 +471,7 @@ pub fn run() {
     let launch_path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .filter(|p| p.exists());
+        .filter(|p| p.is_file());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
