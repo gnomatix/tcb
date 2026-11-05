@@ -9,6 +9,8 @@ environment run `npm i -D playwright` then `npx playwright install chromium` onc
 The tests serve `WebAssets/` from a throwaway local HTTP server and load `index.html` in headless
 Chromium. Because `window.__TAURI__` is absent, `app.js` falls back to its mock host, so these tests
 cover the DOM/keyboard behaviour of the front end only: edit/view toggling, dirty tracking, the
-About dialog, the version bar, Print View (paged.js) and the save/save-as flow as console log lines.
+About dialog, the version bar, Print View (paged.js), the save/save-as flow as console log lines,
+and link routing in the preview (`window.tcbLinks.classifyLink` is exposed for this; external
+links are observed by stubbing `window.open`, which is what the mock host calls).
 They cannot exercise Tauri IPC commands, native file/save dialogs, pulldown-cmark rendering or
 feature detection (mock mode always reports no features), or Windows WebView2 behaviour.

@@ -22,6 +22,12 @@ All notable changes to TCB, M.D. Versions follow semver; the Windows installer a
   the wrong location; the path is now resolved against that instance's directory.
 - The `pagebreaks` badge (an HTML comment) was flagged as unsupported by every flavor.
 - The unsaved-changes dot was drawn even when hidden.
+- Clicking a link in the preview navigated the app's own WebView: an `https://` link
+  replaced the UI with the web page and a relative `other.md` link showed a 404. Links are
+  now routed: `http`/`https`/`mailto` open in the default browser or mail client, relative
+  `.md`/`.markdown` links open that file in the app (with the usual unsaved-edits prompt),
+  `#heading` links scroll to the heading (headings get GitHub-style ids), and anything
+  else is ignored.
 
 ### Added
 - `Ctrl+E` toggles edit mode (documented before, now bound), `Ctrl+Shift+S` Save As,

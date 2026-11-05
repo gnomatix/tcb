@@ -39,6 +39,22 @@ release; each maps to a specific change so a failure points at its cause.
       Quit and relaunch: the zoom level is restored.
 - [ ] `Ctrl+P` still opens the native print dialog; `Ctrl+Shift+P` still opens Print View.
 
+## Links in the preview (`app.js` classifyLink, `tauri-plugin-opener`, `opener:default`)
+
+- [ ] Open a document containing `[web](https://example.com)` and `[mail](mailto:x@example.com)`.
+      Clicking the web link opens `example.com` in the **default browser**; the app window
+      is unchanged (still shows the document, not the web page). The mail link opens the
+      default mail client. Middle-click and `Ctrl`+click on the web link do nothing.
+      (If nothing opens, suspect `opener:default` in `capabilities/default.json`.)
+- [ ] In `C:\docs\a.md` add `[b](sub/b.md#details)` where `C:\docs\sub\b.md` has a
+      `## Details` heading far down. Click it: `b.md` opens in the app (title bar updates)
+      and the view is scrolled to **Details**. With unsaved edits in `a.md` the
+      unsaved-changes confirmation appears first; **No** keeps `a.md`.
+- [ ] Click `[missing](nope.md)`: a "Could not open file" dialog appears and the current
+      document stays loaded. Click `[img](pic.png)` and `[f](file:///C:/x.md)`: nothing happens.
+- [ ] Click a `[toc](#some-heading)` link in a long document: the preview scrolls to that
+      heading; the address does not change and the document stays loaded.
+
 ## History (`lib.rs` git helpers, snapshots)
 
 - [ ] Open a file **in a subdirectory** of a git repo (e.g. `docs\guide.md`): status bar shows

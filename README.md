@@ -20,7 +20,9 @@ can typeset a polished PDF.
 </p>
 
 - **Open & preview Markdown** — clean CommonMark rendering, instant on launch.
-  Open from File Explorer, `Ctrl+O`, or drop a file onto the window.
+  Open from File Explorer, `Ctrl+O`, or drop a file onto the window. Links work the
+  way you'd expect: `#heading` anchors scroll, relative `.md` links open in the app,
+  web links open in your browser.
 - **Edit in place** — toggle edit mode (`Ctrl+E`), save with `Ctrl+S`. Unsaved
   edits are flagged in the title and guarded when you close the window.
 - **Byte-faithful saves** — line endings (CRLF/LF), a UTF-8 BOM, or UTF-16 encoding

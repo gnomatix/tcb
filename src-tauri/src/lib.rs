@@ -491,6 +491,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // External links clicked in the preview open in the default browser / mail client
+        // (`opener:default` in capabilities/default.json limits this to http/https/mailto/tel).
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             launch_path: Mutex::new(launch_path),
         })
