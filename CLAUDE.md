@@ -61,18 +61,43 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+# Build (Windows 11 target; see README "Building from source" for toolchain setup)
+mise run build                 # = cargo tauri build (installer + tcb.exe)
+mise run dev                   # = cargo tauri dev   (debug, live reload)
+
+# Tests
+(cd src-tauri && cargo test --lib)        # Rust unit tests: markdown.rs, textfile.rs, lib.rs git/snapshot helpers
+node --test "tests/ui/*.test.js"          # Front-end smoke tests (headless Chromium, mock host) — needs playwright
 ```
+
+On Linux CI/agent hosts the Rust tests need `libwebkit2gtk-4.1-dev` + `libgtk-3-dev` to
+link the Tauri crate; the logic under test itself is platform-neutral. Anything touching
+Tauri IPC, native dialogs, WebView2, file associations or the installer can only be
+verified on Windows — say so explicitly in handoffs rather than implying it was run.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+- `src-tauri/src/lib.rs` — Tauri 2 shell: window/plugin setup and the `#[tauri::command]`
+  surface (`open_path`, `save_file`, `render_markdown`, versions/snapshots, file meta,
+  pandoc+typst export). Git access is via subprocess, always run from the repo toplevel.
+- `src-tauri/src/markdown.rs` — pure rendering (pulldown-cmark, all extensions, raw HTML
+  demoted to text, `<!-- pagebreak -->` → `<hr class="mdview-pagebreak">`) + feature detection.
+- `src-tauri/src/textfile.rs` — pure text-format plumbing: UTF-8/UTF-16 + BOM decoding,
+  CRLF/LF detection and round-trip (`TextFormat`), launch-path resolution, version merging.
+- `WebAssets/` — static front end (no bundler). `app.js` talks to a *host* abstraction:
+  `makeTauriHost()` in the app, `makeMockHost()` when opened in a plain browser (used by
+  `tests/ui/`). `index.html` + `app.css` + `print.css`; vendored markdown-it, KaTeX, paged.js.
+- `src-tauri/capabilities/default.json` — every Tauri permission the front end relies on.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- Keep logic that can be unit-tested out of `lib.rs` command bodies and in a Tauri-free module.
+- Editor text is always LF-normalized; the on-disk format lives in `state.format` / `TextFormat`
+  and is re-applied by `save_file`. Never write editor text to disk without it.
+- The `TODO(you)` markers that shipped in `app.js` have been resolved; document decisions in a
+  short comment where the choice was made rather than reopening them.
+- Shortcut changes must update three places: the `keydown` map in `app.js`, button `title`
+  attributes in `index.html`, and the README "Keyboard shortcuts" table.
+- Feature labels emitted by `markdown::detect_features` must stay in sync with
+  `FLAVOR_SUPPORT` in `app.js`.

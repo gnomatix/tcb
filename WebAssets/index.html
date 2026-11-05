@@ -14,6 +14,8 @@
 
     <span class="spacer"></span>
 
+    <button id="openBtn" class="btn-icon" title="Open… (Ctrl+O)" aria-label="Open file">📂</button>
+
     <label class="flavor" title="Target Markdown flavor — Save will warn if features aren't supported">
       <span class="flavor-label">Flavor:</span>
       <select id="flavorSelect" class="flavor-select">
@@ -85,6 +87,7 @@
     <span class="features" id="features" aria-label="Detected markdown features"></span>
     <span class="spacer"></span>
     <span class="warn" id="flavorWarn" hidden></span>
+    <span class="file-format" id="fileFormat" aria-label="Line endings and encoding"></span>
     <span class="version-info" id="versionInfo" aria-label="Versioning backend"></span>
   </footer>
 

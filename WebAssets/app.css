@@ -87,6 +87,9 @@ body {
   background: var(--fg-muted);
   display: inline-block;
 }
+/* `display: inline-block` above beats the UA `[hidden] { display: none }` rule, so the
+   dot was drawn even while hidden. Same pattern as .version-bar[hidden] below. */
+.topbar .dirty-dot[hidden] { display: none; }
 
 .topbar .spacer { flex: 1; }
 
@@ -189,6 +192,15 @@ body.theme-dark .statusbar .warn { color: #ff8a8a; }
   border-radius: 3px;
   user-select: none;
 }
+.statusbar .file-format {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  padding: 2px 6px;
+  user-select: none;
+}
+.statusbar .file-format:empty { display: none; }
 .statusbar .version-info[data-status="modified"] { color: var(--accent); }
 .statusbar .version-info[data-status="untracked"] { color: #c80; }
 

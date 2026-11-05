@@ -22,6 +22,7 @@
   const $flavorWarn    = document.getElementById('flavorWarn');
   const $statusbarBtn      = document.getElementById('statusbarToggle');
   const $versionInfo       = document.getElementById('versionInfo');
+  const $fileFormat        = document.getElementById('fileFormat');
   const $versionBarToggle  = document.getElementById('versionBarToggle');
   const $versionBar        = document.getElementById('versionBar');
   const $versionPicker     = document.getElementById('versionPicker');
@@ -73,7 +74,12 @@
     path: null,            // Absolute file path provided by host, or null for unsaved doc.
     savedContent: '',      // Content as-of last load or save. Used for dirty detection.
     isDirty: false,
+    // On-disk text format reported by the host at load time ({encoding, bom, eol}).
+    // Handed back on save so CRLF / BOM / UTF-16 files round-trip byte-for-byte.
+    // null = new document → host default (UTF-8, no BOM, LF).
+    format: null,
   };
+  const MARKDOWN_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
 
   // ------------------------------------------------------------------
   // Host bridge — selects implementation based on environment.
@@ -89,32 +95,74 @@
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
     const clipboard = window.__TAURI__.clipboardManager;
+    const currentWindow = window.__TAURI__.window?.getCurrentWindow?.();
     return {
       kind: 'tauri',
-      async init({ onOpen }) {
+      async init({ onOpen, onOpenError, onCloseRequested }) {
+        // Second instance launched with a file → single-instance plugin forwards the path.
         await listen('open-file', async (e) => {
           const path = typeof e.payload === 'string' ? e.payload : e.payload?.path;
           if (!path) return;
-          const file = await invoke('open_path', { path });
-          if (file) onOpen(file);
+          try {
+            onOpen(await invoke('open_path', { path }));
+          } catch (err) {
+            onOpenError(err);
+          }
         });
-        const launch = await invoke('get_launch_file');
-        if (launch) onOpen(launch);
+        // File dropped onto the window (Tauri emits paths; we take the first markdown-ish one).
+        await listen('tauri://drag-drop', async (e) => {
+          const paths = e.payload?.paths || [];
+          const path = paths.find((p) => /\.(md|markdown|txt)$/i.test(p)) || paths[0];
+          if (!path) return;
+          try {
+            onOpen(await invoke('open_path', { path }));
+          } catch (err) {
+            onOpenError(err);
+          }
+        });
+        // Intercept the OS close button so unsaved edits can be confirmed. Requires
+        // `core:window:allow-destroy` (the JS API destroys the window when not prevented).
+        if (currentWindow?.onCloseRequested) {
+          try {
+            await currentWindow.onCloseRequested(async (event) => {
+              const proceed = await onCloseRequested();
+              if (!proceed) event.preventDefault();
+            });
+          } catch (err) {
+            console.warn('[host] close-requested hook unavailable:', err);
+          }
+        }
+        try {
+          const launch = await invoke('get_launch_file');
+          if (launch) onOpen(launch);
+        } catch (err) {
+          onOpenError(err);
+        }
         await invoke('frontend_ready');
       },
-      async save(path, content) {
-        await invoke('save_file', { path, content });
-        return { path };
+      async setWindowTitle(title) {
+        if (currentWindow?.setTitle) await currentWindow.setTitle(title);
       },
-      async saveAs(content) {
+      async openFile() {
+        const { open } = window.__TAURI__.dialog;
+        const picked = await open({ multiple: false, directory: false, filters: MARKDOWN_FILTERS });
+        const path = Array.isArray(picked) ? picked[0] : picked;
+        if (!path) return null;
+        return await invoke('open_path', { path });
+      },
+      async save(path, content, format) {
+        const written = await invoke('save_file', { path, content, format });
+        return { path, format: written };
+      },
+      async saveAs(content, format, defaultPath) {
         const { save } = window.__TAURI__.dialog;
         const path = await save({
-          defaultPath: 'untitled.md',
-          filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+          defaultPath: defaultPath || 'untitled.md',
+          filters: MARKDOWN_FILTERS,
         });
         if (!path) return null;
-        await invoke('save_file', { path, content });
-        return { path };
+        const written = await invoke('save_file', { path, content, format });
+        return { path, format: written };
       },
       async copyText(text) {
         await clipboard.writeText(text);
@@ -166,16 +214,28 @@
 
   function makeMockHost() {
     console.info('[host] no Tauri detected — running in browser mock mode.');
+    const MOCK_FORMAT = { encoding: 'utf-8', bom: false, eol: 'lf' };
     return {
       kind: 'mock',
-      async init() {/* no launch file */},
-      async save(path, content) {
-        console.info('[host:mock] would save', path, content.length, 'bytes');
-        return { path };
+      async init({ onCloseRequested }) {
+        // Browser equivalent of the close guard: the native beforeunload prompt.
+        window.addEventListener('beforeunload', (e) => {
+          if (state.isDirty) { e.preventDefault(); e.returnValue = ''; }
+        });
+        void onCloseRequested;
       },
-      async saveAs(content) {
+      async setWindowTitle() {/* document.title is the window title in a browser */},
+      async openFile() {
+        console.info('[host:mock] would open a file picker');
+        return null;
+      },
+      async save(path, content, format) {
+        console.info('[host:mock] would save', path, content.length, 'bytes', format || MOCK_FORMAT);
+        return { path, format: format || MOCK_FORMAT };
+      },
+      async saveAs(content, format) {
         console.info('[host:mock] would saveAs', content.length, 'bytes');
-        return { path: 'untitled.md' };
+        return { path: 'untitled.md', format: format || MOCK_FORMAT };
       },
       async copyText(text) {
         if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
@@ -235,14 +295,63 @@
   // ------------------------------------------------------------------
   // Load / save flow
   // ------------------------------------------------------------------
-  async function applyLoadedFile({ path, content }) {
+  async function applyLoadedFile({ path, content, format }) {
     state.path = path || null;
     state.savedContent = content || '';
+    state.format = format || null;
     $editor.value = state.savedContent;
     setDirty(false);
+    renderFileFormat();
     await applyFileFlavorPreference();   // adjust dropdown BEFORE render so badges use right flavor
     await renderPreview(state.savedContent);
     refreshVersionInfo();
+  }
+
+  /** Opening a new file over unsaved edits: confirm first. Returns true to proceed. */
+  async function confirmDiscardIfDirty(action) {
+    if (!state.isDirty) return true;
+    return await host.confirm(
+      `You have unsaved changes. ${action} and discard them?`,
+      { title: 'Unsaved changes', kind: 'warning' },
+    );
+  }
+
+  function reportOpenError(err) {
+    console.error('[open] failed:', err);
+    alert('Could not open file:\n\n' + (err?.message || err));
+  }
+
+  async function openFileViaDialog() {
+    try {
+      if (!(await confirmDiscardIfDirty('Open another file'))) return;
+      const file = await host.openFile();
+      if (file) await applyLoadedFile(file);
+    } catch (err) {
+      reportOpenError(err);
+    }
+  }
+
+  /** Window close guard: true = allow close, false = keep the window open. */
+  async function onCloseRequested() {
+    if (!state.isDirty) return true;
+    return await host.confirm(
+      'You have unsaved changes. Close without saving?',
+      { title: 'Unsaved changes', kind: 'warning' },
+    );
+  }
+
+  const FORMAT_LABEL = { 'utf-8': 'UTF-8', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE' };
+  function renderFileFormat() {
+    if (!$fileFormat) return;
+    const f = state.format;
+    if (!f) {
+      $fileFormat.textContent = '';
+      $fileFormat.title = '';
+      return;
+    }
+    const enc = (FORMAT_LABEL[f.encoding] || f.encoding) + (f.bom && f.encoding === 'utf-8' ? ' BOM' : '');
+    $fileFormat.textContent = `${(f.eol || 'lf').toUpperCase()} · ${enc}`;
+    $fileFormat.title = 'Line endings and encoding detected on load — preserved on save';
   }
 
   async function applyFileFlavorPreference() {
@@ -274,9 +383,11 @@
       if (info.backend === 'git') {
         const parts = [`git: ${info.branch || '?'}`, info.status];
         if (info.count > 0) parts.push(`${info.count} commit${info.count === 1 ? '' : 's'}`);
+        if (info.snapshots > 0) parts.push(`${info.snapshots} snapshot${info.snapshots === 1 ? '' : 's'}`);
         $versionInfo.textContent = parts.join(' · ');
         $versionInfo.title =
-          `Backend: git\nBranch: ${info.branch}\nFile status: ${info.status}\n${info.count} commit(s) touched this file`;
+          `Backend: git\nBranch: ${info.branch}\nFile status: ${info.status}\n${info.count} commit(s) touched this file` +
+          (info.snapshots > 0 ? `\n${info.snapshots} local backup snapshot(s) also listed in the version bar` : '');
       } else if (info.backend === 'snapshots') {
         $versionInfo.textContent = `snapshots: ${info.count}`;
         $versionInfo.title =
@@ -291,7 +402,7 @@
     }
   }
 
-  async function save() {
+  async function save({ forcePrompt = false } = {}) {
     const content = $editor.value;
 
     // Flavor compatibility gate: if features are present that the target flavor
@@ -310,13 +421,15 @@
     }
 
     try {
-      const result = state.path
-        ? await host.save(state.path, content)
-        : await host.saveAs(content);
+      const result = state.path && !forcePrompt
+        ? await host.save(state.path, content, state.format)
+        : await host.saveAs(content, state.format, state.path || undefined);
       if (!result) return;            // User cancelled saveAs dialog.
       state.path = result.path;
       state.savedContent = content;
+      if (result.format) state.format = result.format;
       setDirty(false);
+      renderFileFormat();
       refreshVersionInfo();           // count + status may have changed.
     } catch (err) {
       console.error('[save] failed:', err);
@@ -436,32 +549,44 @@
   }
 
   function enterViewMode() {
-    // TODO(you): save-on-toggle policy. ~5 lines.
-    // When the user flips back to view with unsaved changes, what should happen?
-    //   (a) Silently keep edits in memory (current behaviour).
-    //   (b) Auto-save if state.path exists (matches Notepad's autosave-on-close).
-    //   (c) Prompt to save (most explicit; interrupts flow).
-    // Pick one and add it here.
-
+    // Save-on-toggle policy: edits stay in memory (never auto-written). The dirty dot,
+    // the "•" in the title and the close-window guard make unsaved state visible, and
+    // Ctrl+S / Save commit it explicitly. Auto-saving on toggle would write half-done
+    // edits into git working trees without the user asking for it.
+    cancelScheduledRender();
     renderPreview($editor.value);
     $body.classList.remove('mode-edit');
     $body.classList.add('mode-view');
     $editor.hidden = true;
   }
 
+  function toggleEditMode() {
+    if ($toggle.disabled) return;      // A past version is selected in the version bar.
+    $toggle.checked = !$toggle.checked;
+    $toggle.dispatchEvent(new Event('change'));
+  }
+
   // ------------------------------------------------------------------
   // Editor change handling
   // ------------------------------------------------------------------
-  // TODO(you): re-render strategy. ~10 lines.
-  // Pick how aggressively to refresh the preview from editor content:
-  //   (a) Eager: on every 'input' event. Simplest, but laggy on large files.
-  //   (b) Debounced: re-render N ms after the last keystroke. Smoother;
-  //       requires a small setTimeout/clearTimeout cycle.
-  //   (c) Only on toggle-back-to-view (current behaviour). Snappiest typing,
-  //       but the preview can drift from the editor until you flip back.
+  // Re-render strategy: debounced. The preview itself is hidden while editing, but
+  // the render also drives the feature badges and the flavor-compatibility warning in
+  // the status bar, so those stay current as you type without re-parsing on every key.
+  const RENDER_DEBOUNCE_MS = 350;
+  let renderTimer = null;
+  function scheduleRender() {
+    cancelScheduledRender();
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      if ($body.classList.contains('mode-edit')) renderPreview($editor.value);
+    }, RENDER_DEBOUNCE_MS);
+  }
+  function cancelScheduledRender() {
+    if (renderTimer !== null) { clearTimeout(renderTimer); renderTimer = null; }
+  }
   $editor.addEventListener('input', () => {
     setDirty($editor.value !== state.savedContent);
-    // Add re-render call here if you picked (a) or (b).
+    scheduleRender();
   });
 
   // ------------------------------------------------------------------
@@ -493,6 +618,8 @@
       ? `${state.path}\n\nClick to copy folder path:\n${parentDir(state.path)}`
       : '';
     document.title = (state.isDirty ? '• ' : '') + tabName;
+    // The native window title does not follow document.title in a WebView; push it.
+    host.setWindowTitle(`${document.title} — TCB, M.D.`).catch(() => {/* cosmetic */});
   }
 
   let flashTimer = null;
@@ -528,19 +655,28 @@
   // ------------------------------------------------------------------
   // Save button + keyboard shortcuts
   // ------------------------------------------------------------------
-  $saveBtn.addEventListener('click', save);
+  $saveBtn.addEventListener('click', () => save());
+  document.getElementById('openBtn')?.addEventListener('click', openFileViaDialog);
 
-  // TODO(you): keyboard shortcut map. ~5 lines.
-  // Ctrl+S → save is wired below. Pick others to bind now or defer:
-  //   Ctrl+E         → toggle edit/view
-  //   Ctrl+Shift+S   → Save As (force prompt)
-  //   F11            → fullscreen
+  // Keyboard shortcut map (keep the README "Keyboard shortcuts" table in sync):
+  //   Ctrl+S → Save            Ctrl+Shift+S → Save As (always prompts)
+  //   Ctrl+O → Open…           Ctrl+E       → toggle edit/view
+  //   Ctrl+H → Versions bar    Ctrl+P       → Print     Ctrl+Shift+P → Print View
   document.addEventListener('keydown', (e) => {
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     if (ctrl && !e.shiftKey && key === 's') {
       e.preventDefault();
       save();
+    } else if (ctrl && e.shiftKey && key === 's') {
+      e.preventDefault();
+      save({ forcePrompt: true });
+    } else if (ctrl && !e.shiftKey && key === 'o') {
+      e.preventDefault();
+      openFileViaDialog();
+    } else if (ctrl && !e.shiftKey && key === 'e') {
+      e.preventDefault();
+      toggleEditMode();
     } else if (ctrl && !e.shiftKey && key === 'h') {
       e.preventDefault();
       toggleVersionBar();
@@ -923,11 +1059,12 @@
   // ------------------------------------------------------------------
   // Initial render: show welcome until host hands us a file.
   // ------------------------------------------------------------------
+  setDirty(false);   // sync Save button (enabled: no path → Save acts as Save As) + titles
   renderPreview('# Welcome\n\nOpen a `.md` file from File Explorer, or toggle **Edit** to start writing.');
 
   // Kick the host. Tauri host will call onOpen if launched with a file,
   // then call frontend_ready so the window appears.
-  host.init({ onOpen: applyLoadedFile }).catch((err) => {
+  host.init({ onOpen: applyLoadedFile, onOpenError: reportOpenError, onCloseRequested }).catch((err) => {
     console.error('[host:init] failed:', err);
   });
 })();

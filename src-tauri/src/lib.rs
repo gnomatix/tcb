@@ -6,6 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+pub mod markdown;
+pub mod textfile;
+
+use textfile::{TextFormat, VersionEntry};
+
 /// Shared app state. The launch file path is set once at process start from argv
 /// and consumed by the frontend on its first `get_launch_file` call.
 #[derive(Default)]
@@ -13,38 +18,55 @@ struct AppState {
     launch_path: Mutex<Option<PathBuf>>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 struct LoadedFile {
     path: String,
+    /// LF-normalized, BOM-free text ready for the editor.
     content: String,
+    /// On-disk format captured at load; the frontend hands it back to `save_file`
+    /// so line endings / BOM / UTF-16 survive a round trip untouched.
+    format: TextFormat,
 }
 
 /// Returns the file passed via argv at launch (if any), reading its content.
-/// The frontend calls this once on startup.
+/// The frontend calls this once on startup. `Err` carries a user-facing reason
+/// (unreadable, not text, …) so the UI can say *why* nothing opened.
 #[tauri::command]
-fn get_launch_file(state: State<AppState>) -> Option<LoadedFile> {
-    let path = state.launch_path.lock().ok()?.take()?;
-    read_file(&path)
+fn get_launch_file(state: State<AppState>) -> Result<Option<LoadedFile>, String> {
+    let Some(path) = state.launch_path.lock().map_err(|e| e.to_string())?.take() else {
+        return Ok(None);
+    };
+    read_file(&path).map(Some)
 }
 
 /// Open an arbitrary path. Used when a second app instance is launched with a file
-/// and forwards the path here via the single-instance plugin.
+/// and forwards the path here via the single-instance plugin, when a file is
+/// dropped on the window, or when the user picks one via Ctrl+O.
 #[tauri::command]
-fn open_path(path: String) -> Option<LoadedFile> {
+fn open_path(path: String) -> Result<LoadedFile, String> {
     read_file(Path::new(&path))
 }
 
-fn read_file(path: &Path) -> Option<LoadedFile> {
-    let content = std::fs::read_to_string(path).ok()?;
-    Some(LoadedFile {
+fn read_file(path: &Path) -> Result<LoadedFile, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("Could not read {}: {}", path.display(), e))?;
+    let decoded = textfile::decode(&bytes)
+        .map_err(|e| format!("Could not open {}: {}", path.display(), e))?;
+    Ok(LoadedFile {
         path: path.to_string_lossy().into_owned(),
-        content,
+        content: decoded.text,
+        format: decoded.format,
     })
 }
 
+/// Write `content` (LF-normalized editor text) to `path`, re-applying the file's
+/// original encoding / BOM / line endings. `format` is `None` for brand-new files,
+/// which are written as plain UTF-8 with LF.
 #[tauri::command]
-fn save_file(app: AppHandle, path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, &content).map_err(|e| e.to_string())?;
+fn save_file(app: AppHandle, path: String, content: String, format: Option<TextFormat>) -> Result<TextFormat, String> {
+    let format = format.unwrap_or_default();
+    let bytes = textfile::encode(&content, format);
+    std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {}: {}", path, e))?;
     // If the file ISN'T in a git repo, take a local snapshot so we still have history.
     // Best-effort: a failed snapshot does not fail the save itself.
     let p = Path::new(&path);
@@ -53,7 +75,7 @@ fn save_file(app: AppHandle, path: String, content: String) -> Result<(), String
             eprintln!("[snapshot] failed: {}", err);
         }
     }
-    Ok(())
+    Ok(format)
 }
 
 // ---------------------------------------------------------------------------
@@ -70,44 +92,41 @@ struct VersionInfo {
     status: String,
     /// Past version count (git: commits touching this file; snapshots: file count).
     count: usize,
+    /// Local snapshots that exist alongside git history (0 when backend == "snapshots",
+    /// where `count` already is the snapshot count).
+    snapshots: usize,
 }
 
-#[derive(Serialize, Clone)]
-struct VersionEntry {
-    /// git commit hash, OR snapshot timestamp (Unix seconds as decimal string).
-    id: String,
-    /// Author time (git) or file mtime / filename (snapshots). Unix seconds.
-    timestamp_unix: i64,
-    /// Commit subject (git) or "snapshot" (snapshots).
-    label: String,
-    /// Git author name; None for snapshots.
-    author: Option<String>,
-}
-
-/// List past versions (git commits or local snapshots), newest first, capped at 200.
+/// List past versions newest first: git commits (capped at 200) merged with any
+/// local snapshots. Snapshots exist for git-tracked files too, because the
+/// "Backup current first" restore option always writes one.
 #[tauri::command]
 fn list_versions(app: AppHandle, path: String) -> Vec<VersionEntry> {
     let p = Path::new(&path);
+    let snapshots = snapshot_list_versions(&app, p);
     if let Some(dir) = p.parent() {
         if let Some((toplevel, _)) = git_toplevel_and_branch(dir) {
             let rel = path_relative_to(p, &toplevel);
-            return git_list_versions(dir, &rel);
+            return textfile::merge_versions(git_list_versions(&toplevel, &rel), snapshots);
         }
     }
-    snapshot_list_versions(&app, p)
+    snapshots
 }
 
 /// Read a specific past version's content by id (commit hash or snapshot timestamp).
 #[tauri::command]
 fn read_version(app: AppHandle, path: String, id: String) -> Result<String, String> {
     let p = Path::new(&path);
+    if textfile::is_snapshot_id(&id) {
+        return snapshot_read_impl(&app, p, &id);
+    }
     if let Some(dir) = p.parent() {
         if let Some((toplevel, _)) = git_toplevel_and_branch(dir) {
             let rel = path_relative_to(p, &toplevel);
-            return git_show_file(dir, &id, &rel);
+            return git_show_file(&toplevel, &id, &rel);
         }
     }
-    snapshot_read_impl(&app, p, &id)
+    Err(format!("Version {} not found", id))
 }
 
 fn git_list_versions(dir: &Path, rel: &Path) -> Vec<VersionEntry> {
@@ -141,7 +160,12 @@ fn git_show_file(dir: &Path, hash: &str, rel: &Path) -> Result<String, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    // Historical blobs may carry CRLF / a BOM; normalize like a fresh load so the
+    // diff against the (LF) editor text doesn't flag every line.
+    match textfile::decode(&out.stdout) {
+        Ok(d) => Ok(d.text),
+        Err(_) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+    }
 }
 
 fn snapshot_list_versions(app: &AppHandle, path: &Path) -> Vec<VersionEntry> {
@@ -228,8 +252,9 @@ fn get_version_info(app: AppHandle, path: String) -> VersionInfo {
             return VersionInfo {
                 backend: "git".to_string(),
                 branch: Some(branch),
-                status: git_file_status(dir, &rel).unwrap_or_else(|| "unknown".to_string()),
-                count: git_count_commits(dir, &rel),
+                status: git_file_status(&toplevel, &rel).unwrap_or_else(|| "unknown".to_string()),
+                count: git_count_commits(&toplevel, &rel),
+                snapshots: snapshot_count(&app, p),
             };
         }
     }
@@ -238,10 +263,16 @@ fn get_version_info(app: AppHandle, path: String) -> VersionInfo {
         branch: None,
         status: if p.exists() { "tracked".to_string() } else { "untracked".to_string() },
         count: snapshot_count(&app, p),
+        snapshots: 0,
     }
 }
 
 // ----- git helpers (subprocess) -----
+//
+// Every helper that takes a `rel` path runs git from the repository TOPLEVEL.
+// Pathspecs are interpreted relative to git's working directory, so running from
+// the file's own directory with a toplevel-relative path matched nothing for any
+// file below the repo root (empty history, "0 commits").
 
 fn git_run(dir: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
@@ -317,21 +348,24 @@ fn snapshot_dir(app: &AppHandle, path: &Path) -> Result<PathBuf, String> {
 }
 
 fn snapshot_count(app: &AppHandle, path: &Path) -> usize {
-    snapshot_dir(app, path)
-        .ok()
-        .and_then(|d| std::fs::read_dir(d).ok())
-        .map(|entries| entries.filter_map(|e| e.ok()).count())
-        .unwrap_or(0)
+    snapshot_list_versions(app, path).len()
 }
 
 fn snapshot_save_impl(app: &AppHandle, path: &Path, content: &str) -> Result<(), String> {
     let dir = snapshot_dir(app, path)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ts = SystemTime::now()
+    let mut ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    let file = dir.join(format!("{}.md", ts));
+    // Snapshot ids have one-second resolution. Two saves inside the same second
+    // (e.g. "Backup current first" immediately after Ctrl+S) must not overwrite
+    // each other, so bump forward until the slot is free.
+    let mut file = dir.join(format!("{}.md", ts));
+    while file.exists() {
+        ts += 1;
+        file = dir.join(format!("{}.md", ts));
+    }
     std::fs::write(file, content).map_err(|e| e.to_string())
 }
 
@@ -387,250 +421,11 @@ fn export_typeset_pdf(input: String, output: String) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Serialize)]
-struct RenderResult {
-    html: String,
-    /// Feature labels detected in the source, e.g. "frontmatter", "tables", "math".
-    /// Used by the UI to badge what's present in the document.
-    features: Vec<String>,
-}
-
 /// Render markdown to HTML and detect notable features in one pass.
-///
-/// Enables the full pulldown-cmark extension set so any flavor's content renders.
-/// Raw HTML in the source is escaped (not passed through) to keep XSS off the table
-/// when opening untrusted `.md` files.
-///
-/// Explicit `<!-- pagebreak -->` markers in the source are turned into
-/// `<hr class="mdview-pagebreak" />` so CSS / paged.js / native print can act on them.
+/// See [`markdown::render`] for the details (extension set, HTML escaping, pagebreaks).
 #[tauri::command]
-fn render_markdown(text: String) -> RenderResult {
-    use pulldown_cmark::{html, CowStr, Event, Options, Parser};
-
-    // Pre-process: rewrite `<!-- pagebreak -->` (with flexible inner whitespace) into a
-    // unique paragraph token that survives parsing without being escaped as raw HTML.
-    let pre = rewrite_pagebreak_markers(&text);
-
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_TABLES);
-    opts.insert(Options::ENABLE_FOOTNOTES);
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TASKLISTS);
-    opts.insert(Options::ENABLE_SMART_PUNCTUATION);
-    opts.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-    opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
-    opts.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
-    opts.insert(Options::ENABLE_MATH);
-    opts.insert(Options::ENABLE_DEFINITION_LIST);
-    opts.insert(Options::ENABLE_GFM);
-    // Intentionally NOT enabling ENABLE_OLD_FOOTNOTES — it changes footnote syntax
-    // away from the GitHub-style one which is the modern convention.
-
-    let parser = Parser::new_ext(&pre, opts).map(|event| match event {
-        // Defang raw HTML in the input by escaping it. The user sees the literal tag
-        // text instead of having it rendered (and possibly executed).
-        Event::Html(html) => Event::Text(CowStr::from(escape_html(&html))),
-        Event::InlineHtml(html) => Event::Text(CowStr::from(escape_html(&html))),
-        other => other,
-    });
-
-    let mut out = String::with_capacity(pre.len() * 3 / 2);
-    html::push_html(&mut out, parser);
-
-    // Post-process: replace the pagebreak placeholder paragraphs with real <hr> elements.
-    let final_html = out
-        .replace(
-            &format!("<p>{}</p>\n", PAGEBREAK_PLACEHOLDER),
-            "<hr class=\"mdview-pagebreak\" />\n",
-        )
-        .replace(
-            &format!("<p>{}</p>", PAGEBREAK_PLACEHOLDER),
-            "<hr class=\"mdview-pagebreak\" />",
-        );
-
-    RenderResult {
-        html: final_html,
-        features: detect_features(&text),
-    }
-}
-
-const PAGEBREAK_PLACEHOLDER: &str = "MDVIEW_PAGEBREAK_7f29a5b3";
-
-fn rewrite_pagebreak_markers(text: &str) -> String {
-    // Match `<!--` + optional whitespace + `pagebreak` + optional whitespace + `-->`.
-    // Uses string slicing on str (UTF-8 safe) instead of byte indexing.
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(idx) = rest.find("<!--") {
-        out.push_str(&rest[..idx]);
-        let after = &rest[idx + 4..];
-        let trimmed = after.trim_start();
-        if let Some(tail) = trimmed.strip_prefix("pagebreak") {
-            if let Some(tail2) = tail.trim_start().strip_prefix("-->") {
-                out.push_str("\n\n");
-                out.push_str(PAGEBREAK_PLACEHOLDER);
-                out.push_str("\n\n");
-                rest = tail2;
-                continue;
-            }
-        }
-        out.push_str("<!--");
-        rest = after;
-    }
-    out.push_str(rest);
-    out
-}
-
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&'  => out.push_str("&amp;"),
-            '<'  => out.push_str("&lt;"),
-            '>'  => out.push_str("&gt;"),
-            '"'  => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Scan the source for feature signatures. Cheap string-based heuristics — not a parser.
-/// Returns the labels in a stable order so the UI badge row doesn't shuffle on re-render.
-fn detect_features(text: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut push = |label: &str| {
-        if !found.iter().any(|s: &String| s == label) {
-            found.push(label.to_string());
-        }
-    };
-
-    // YAML frontmatter at the very top: starts with `---\n` and has a closing `---` or `...`.
-    if text.starts_with("---\n") || text.starts_with("---\r\n") {
-        let body = &text[3..];
-        if body.contains("\n---\n") || body.contains("\n---\r\n") || body.contains("\n...\n") {
-            push("frontmatter");
-        }
-    }
-
-    // GitHub alerts: `> [!NOTE]` style callouts.
-    if text.contains("> [!NOTE]")
-        || text.contains("> [!TIP]")
-        || text.contains("> [!WARNING]")
-        || text.contains("> [!IMPORTANT]")
-        || text.contains("> [!CAUTION]")
-    {
-        push("github-alerts");
-    }
-
-    // Task lists.
-    for line in text.lines() {
-        let l = line.trim_start();
-        if l.starts_with("- [ ]") || l.starts_with("- [x]") || l.starts_with("- [X]")
-            || l.starts_with("* [ ]") || l.starts_with("* [x]") || l.starts_with("* [X]")
-        {
-            push("tasklists");
-            break;
-        }
-    }
-
-    // Tables: a line with a pipe AND a separator line with dashes and pipes.
-    let mut prev_has_pipe = false;
-    for line in text.lines() {
-        let has_pipe = line.contains('|');
-        let trimmed = line.trim();
-        let is_sep = !trimmed.is_empty()
-            && trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
-            && trimmed.contains('-') && trimmed.contains('|');
-        if prev_has_pipe && is_sep {
-            push("tables");
-            break;
-        }
-        prev_has_pipe = has_pipe;
-    }
-
-    // Strikethrough.
-    if text.matches("~~").count() >= 2 {
-        push("strikethrough");
-    }
-
-    // Footnotes: `[^id]:` definition somewhere.
-    if text.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with("[^") && t.contains("]:")
-    }) {
-        push("footnotes");
-    }
-
-    // Math: $$...$$ (display) or $...$ (inline). Naive check — false positives possible.
-    if text.contains("$$") {
-        push("math");
-    } else if has_inline_math(text) {
-        push("math");
-    }
-
-    // Wikilinks `[[...]]`.
-    if text.contains("[[") && text.contains("]]") {
-        push("wikilinks");
-    }
-
-    // Heading attributes `# Heading {#id .class}`.
-    if text.lines().any(|l| {
-        let t = l.trim_start();
-        (t.starts_with('#')) && t.contains("{#")
-    }) {
-        push("heading-attrs");
-    }
-
-    // Pandoc fenced divs `:::`.
-    if text.lines().any(|l| l.trim_start().starts_with(":::")) {
-        push("fenced-divs");
-    }
-
-    // Definition lists: term line followed by `: ` continuation.
-    let lines: Vec<&str> = text.lines().collect();
-    for i in 1..lines.len() {
-        if lines[i].trim_start().starts_with(": ") && !lines[i - 1].trim().is_empty() {
-            push("definitions");
-            break;
-        }
-    }
-
-    // Pandoc citations: `[@key]` or standalone `@key` patterns.
-    if text.contains("[@") {
-        push("citations");
-    }
-
-    // Explicit page-break marker.
-    if text.contains("<!--") && text.contains("pagebreak") && text.contains("-->") {
-        push("pagebreaks");
-    }
-
-    found
-}
-
-/// Conservative inline-math detector: looks for a `$` followed by non-space then `$`
-/// on the same line. Avoids false positives on currency like "$5".
-fn has_inline_math(text: &str) -> bool {
-    for line in text.lines() {
-        let bytes = line.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] != b' ' && bytes[i + 1] != b'$' {
-                if let Some(close) = line[i + 1..].find('$') {
-                    let inside = &line[i + 1..i + 1 + close];
-                    if !inside.is_empty() && !inside.starts_with(' ') && !inside.ends_with(' ') {
-                        return true;
-                    }
-                    i = i + 1 + close + 1;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-    }
-    false
+fn render_markdown(text: String) -> markdown::Rendered {
+    markdown::render(&text)
 }
 
 /// Frontend calls this once it has painted its initial state.
@@ -648,11 +443,14 @@ pub fn run() {
         .filter(|p| p.exists());
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
-                if let Some(path) = args.get(1) {
-                    let _ = window.emit("open-file", path.clone());
+                if let Some(arg) = args.get(1) {
+                    // The second instance may have been started with a relative path from
+                    // a different working directory — resolve against *its* cwd.
+                    let path = textfile::resolve_path_arg(arg, Some(Path::new(&cwd)));
+                    let _ = window.emit("open-file", path.to_string_lossy().into_owned());
                 }
             }
         }))
@@ -680,4 +478,76 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_hash_is_deterministic_and_distinct() {
+        assert_eq!(path_hash("C:\\a\\b.md"), path_hash("C:\\a\\b.md"));
+        assert_ne!(path_hash("C:\\a\\b.md"), path_hash("C:\\a\\c.md"));
+        // Known FNV-1a 64 vector.
+        assert_eq!(path_hash(""), 0xcbf29ce484222325);
+        assert_eq!(path_hash("a"), 0xaf63dc4c8601ec8c);
+    }
+
+    #[test]
+    fn diff_text_produces_unified_hunks() {
+        let d = diff_text("a\nb\nc\n".into(), "a\nB\nc\n".into());
+        assert!(d.contains("--- older"), "{d}");
+        assert!(d.contains("+++ current"), "{d}");
+        assert!(d.contains("-b\n"), "{d}");
+        assert!(d.contains("+B\n"), "{d}");
+    }
+
+    #[test]
+    fn diff_text_identical_is_empty() {
+        assert_eq!(diff_text("same\n".into(), "same\n".into()), "");
+    }
+
+    #[test]
+    fn read_file_reports_missing_and_binary() {
+        let dir = std::env::temp_dir().join(format!("tcb-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = read_file(&dir.join("nope.md")).unwrap_err();
+        assert!(missing.starts_with("Could not read"), "{missing}");
+
+        let bin = dir.join("bin.md");
+        std::fs::write(&bin, [0x00, 0xFF, 0xFE, 0x80, 0x81]).unwrap();
+        let err = read_file(&bin).unwrap_err();
+        assert!(err.contains("not valid UTF-8"), "{err}");
+
+        let crlf = dir.join("crlf.md");
+        std::fs::write(&crlf, b"\xEF\xBB\xBF# T\r\n\r\nx\r\n").unwrap();
+        let f = read_file(&crlf).unwrap();
+        assert_eq!(f.content, "# T\n\nx\n");
+        assert_eq!(f.format, TextFormat { encoding: textfile::Encoding::Utf8, bom: true, eol: textfile::LineEnding::Crlf });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_helpers_run_against_this_repo() {
+        // The crate lives inside the project's own git checkout; use it as a fixture.
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        if git_toplevel_and_branch(here).is_none() {
+            eprintln!("skipping: not inside a git work tree");
+            return;
+        }
+        assert!(is_inside_git(&here.join("Cargo.toml")));
+        let (top, _branch) = git_toplevel_and_branch(here).unwrap();
+        let rel = path_relative_to(&here.join("Cargo.toml"), &top);
+        assert_eq!(rel, Path::new("src-tauri/Cargo.toml"));
+        // Regression: the file lives in a subdirectory, so this only works when git
+        // runs from the toplevel.
+        let versions = git_list_versions(&top, &rel);
+        assert!(!versions.is_empty());
+        assert!(versions.windows(2).all(|w| w[0].timestamp_unix >= w[1].timestamp_unix));
+        assert_eq!(git_count_commits(&top, &rel), versions.len());
+        let content = git_show_file(&top, &versions[0].id, &rel).unwrap();
+        assert!(content.contains("[package]"));
+        assert!(git_file_status(&top, &rel).is_some());
+        assert!(git_list_versions(here, &rel).is_empty(), "sanity: running from the subdir still fails");
+    }
 }

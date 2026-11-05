@@ -20,7 +20,13 @@ can typeset a polished PDF.
 </p>
 
 - **Open & preview Markdown** — clean CommonMark rendering, instant on launch.
-- **Edit in place** — toggle edit mode (`Ctrl+E`), save with `Ctrl+S`.
+  Open from File Explorer, `Ctrl+O`, or drop a file onto the window.
+- **Edit in place** — toggle edit mode (`Ctrl+E`), save with `Ctrl+S`. Unsaved
+  edits are flagged in the title and guarded when you close the window.
+- **Byte-faithful saves** — line endings (CRLF/LF), a UTF-8 BOM, or UTF-16 encoding
+  are detected on open, shown in the status bar, and written back unchanged.
+- **History** (`Ctrl+H`) — browse git commits that touched the file, or local
+  snapshots when the file isn't in a repo; diff and restore any version.
 - **Math** — inline and display math via KaTeX.
 - **Flavor-aware** — pick a target Markdown flavor; Save warns if your document
   uses features the chosen flavor doesn't support.
@@ -43,8 +49,11 @@ codegen unit, and a stripped binary.
 
 | Action | Shortcut |
 |---|---|
+| Open file | `Ctrl+O` |
 | Toggle edit mode | `Ctrl+E` |
 | Save | `Ctrl+S` |
+| Save As | `Ctrl+Shift+S` |
+| Version history bar | `Ctrl+H` |
 | Print View | `Ctrl+Shift+P` |
 | Print | `Ctrl+P` |
 
@@ -123,3 +132,14 @@ mise run build      # builds the app — one command
 For live development (debug build, auto-reload) use `mise run dev`. Without mise, the
 equivalent is `cargo tauri build` (or `cargo build --release` in `src-tauri/` for just
 the bare `tcb.exe`).
+
+### Tests
+
+```powershell
+cd src-tauri; cargo test --lib          # Rust: rendering, feature detection, text format round-trip, git/snapshot history
+cd ..;        npm run test:ui           # Front end: headless Chromium smoke tests of WebAssets in mock-host mode
+```
+
+The UI suite needs Node 22+ and Playwright (`npm i -D playwright && npx playwright install chromium`
+once). See `tests/ui/README.md` for what it does and does not cover; anything that
+touches Tauri IPC, native dialogs or WebView2 still needs a manual run on Windows.
