@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'            # e.g. v0.1.0 — a version tag triggers a release build
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create/update (e.g. v0.2.0). Required when run manually from a branch.'
+        required: true
+        type: string
 
 jobs:
   publish-tauri:
@@ -78,8 +83,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'TCB, M.D. ${{ github.ref_name }}'
+          # Tag push → the pushed tag. Manual run → the `tag` input (tauri-action creates
+          # the draft release for it; the tag ref itself appears when the draft is published).
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'TCB, M.D. ${{ github.event.inputs.tag || github.ref_name }}'
           releaseBody: >-
             ${{ steps.sig.outputs.signing == 'true'
                 && 'See the assets to download and install this version.'
