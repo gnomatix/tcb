@@ -243,6 +243,30 @@ test('f2. Control+O and the Open button ask the host for a file picker', async (
   assert.equal((await page.locator('#docTitle').textContent()).trim(), 'untitled.md');
 });
 
+test('f3. zoom: Control+= / Control+- / Control+0 change the level and it survives a reload', async () => {
+  await openPage();
+  const zoomOf = () => page.evaluate(() => document.documentElement.style.zoom || '1');
+  const stored = () => page.evaluate(() => localStorage.getItem('mdview.zoom'));
+
+  assert.equal(await zoomOf(), '1', 'default zoom is 100%');
+  await page.keyboard.press('Control+=');
+  assert.equal(await zoomOf(), '1.1', 'one step in from 100% is 110%');
+  await page.keyboard.press('Control+=');
+  assert.equal(await zoomOf(), '1.25');
+  assert.equal(await stored(), '1.25', 'zoom level is persisted');
+  assert.match(await page.locator('#docTitle').textContent(), /Zoom 125%/, 'title flashes the new level');
+
+  await page.reload();
+  await page.waitForFunction(() => (document.querySelector('#preview h1')?.textContent || '').includes('Welcome'));
+  assert.equal(await zoomOf(), '1.25', 'zoom restored after reload');
+
+  await page.keyboard.press('Control+-');
+  assert.equal(await zoomOf(), '1.1');
+  await page.keyboard.press('Control+0');
+  assert.equal(await zoomOf(), '1', 'Control+0 resets');
+  assert.equal(await stored(), '1');
+});
+
 test('g. About dialog opens from the toolbar button and closes on Escape', async () => {
   await openPage();
 

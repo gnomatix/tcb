@@ -56,6 +56,7 @@ codegen unit, and a stripped binary.
 | Version history bar | `Ctrl+H` |
 | Print View | `Ctrl+Shift+P` |
 | Print | `Ctrl+P` |
+| Zoom in / out / reset (remembered) | `Ctrl+=` / `Ctrl+-` / `Ctrl+0`, or `Ctrl`+wheel |
 
 ## Status
 

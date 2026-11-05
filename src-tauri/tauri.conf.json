@@ -21,7 +21,7 @@
         "transparent": false,
         "visible": false,
         "center": true,
-        "zoomHotkeysEnabled": true,
+        "zoomHotkeysEnabled": false,
         "url": "index.html"
       }
     ],

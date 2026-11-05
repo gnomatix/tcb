@@ -14,12 +14,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Byte encoding of the file on disk.
+/// Wire names are pinned explicitly (`utf-8`, `utf-16le`, `utf-16be`) — they are what
+/// `app.js` matches on; see `text_format_wire_names` below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
 pub enum Encoding {
     #[default]
+    #[serde(rename = "utf-8")]
     Utf8,
+    #[serde(rename = "utf-16le")]
     Utf16Le,
+    #[serde(rename = "utf-16be")]
     Utf16Be,
 }
 
@@ -210,6 +214,21 @@ pub fn is_snapshot_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_format_wire_names_match_app_js() {
+        // app.js: FORMAT_LABEL keys and MOCK_FORMAT use exactly these strings.
+        let f = |encoding, bom, eol| serde_json::to_string(&TextFormat { encoding, bom, eol }).unwrap();
+        assert_eq!(f(Encoding::Utf8, false, LineEnding::Lf), r#"{"encoding":"utf-8","bom":false,"eol":"lf"}"#);
+        assert_eq!(f(Encoding::Utf16Le, true, LineEnding::Crlf), r#"{"encoding":"utf-16le","bom":true,"eol":"crlf"}"#);
+        assert_eq!(f(Encoding::Utf16Be, true, LineEnding::Lf), r#"{"encoding":"utf-16be","bom":true,"eol":"lf"}"#);
+        // And a JS-built default must deserialize (save_file receives it from the front end).
+        let parsed: TextFormat = serde_json::from_str(r#"{"encoding":"utf-8","bom":false,"eol":"crlf"}"#).unwrap();
+        assert_eq!(parsed, TextFormat { encoding: Encoding::Utf8, bom: false, eol: LineEnding::Crlf });
+        // Missing format on save → defaults.
+        assert_eq!(TextFormat::default(), TextFormat { encoding: Encoding::Utf8, bom: false, eol: LineEnding::Lf });
+        assert_eq!(encode("a\nb", TextFormat::default()), b"a\nb");
+    }
 
     #[test]
     fn decode_plain_utf8_lf() {

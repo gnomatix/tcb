@@ -190,7 +190,11 @@ fn snapshot_list_versions(app: &AppHandle, path: &Path) -> Vec<VersionEntry> {
 fn snapshot_read_impl(app: &AppHandle, path: &Path, id: &str) -> Result<String, String> {
     let dir = snapshot_dir(app, path)?;
     let file = dir.join(format!("{}.md", id));
-    std::fs::read_to_string(file).map_err(|e| e.to_string())
+    let bytes = std::fs::read(file).map_err(|e| e.to_string())?;
+    // Snapshots written by older builds may carry a BOM / CRLF; normalize like a load.
+    Ok(textfile::decode(&bytes)
+        .map(|d| d.text)
+        .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 /// Produce a unified text diff between two strings. `similar` 3.x returns `&mut Self`
@@ -448,9 +452,12 @@ pub fn run() {
                 let _ = window.set_focus();
                 if let Some(arg) = args.get(1) {
                     // The second instance may have been started with a relative path from
-                    // a different working directory — resolve against *its* cwd.
+                    // a different working directory — resolve against *its* cwd. Ignore
+                    // arguments that aren't files (same filter as the first instance).
                     let path = textfile::resolve_path_arg(arg, Some(Path::new(&cwd)));
-                    let _ = window.emit("open-file", path.to_string_lossy().into_owned());
+                    if path.is_file() {
+                        let _ = window.emit("open-file", path.to_string_lossy().into_owned());
+                    }
                 }
             }
         }))

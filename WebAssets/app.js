@@ -54,16 +54,18 @@
   // `null` means the flavor has no validation (i.e. anything goes).
   // Keep these sets in sync with the detector labels in src-tauri/src/lib.rs.
   // ------------------------------------------------------------------
+  // `pagebreaks` is an HTML comment (`<!-- pagebreak -->`), legal in every flavor
+  // including CommonMark, so it is never flagged.
   const FLAVOR_SUPPORT = {
     any:           null,
-    commonmark:    new Set([]),
-    gfm:           new Set(['tables', 'tasklists', 'strikethrough', 'footnotes', 'github-alerts']),
+    commonmark:    new Set(['pagebreaks']),
+    gfm:           new Set(['tables', 'tasklists', 'strikethrough', 'footnotes', 'github-alerts', 'pagebreaks']),
     pandoc:        new Set(['tables', 'tasklists', 'strikethrough', 'footnotes', 'math',
-                            'heading-attrs', 'fenced-divs', 'definitions', 'citations', 'frontmatter']),
+                            'heading-attrs', 'fenced-divs', 'definitions', 'citations', 'frontmatter', 'pagebreaks']),
     multimarkdown: new Set(['tables', 'footnotes', 'math', 'heading-attrs', 'definitions',
-                            'citations', 'frontmatter']),
+                            'citations', 'frontmatter', 'pagebreaks']),
     obsidian:      new Set(['tables', 'tasklists', 'strikethrough', 'footnotes', 'github-alerts',
-                            'math', 'wikilinks', 'frontmatter']),
+                            'math', 'wikilinks', 'frontmatter', 'pagebreaks']),
   };
   const FLAVOR_KEY = 'mdview.flavor';
   $flavorSelect.value = localStorage.getItem(FLAVOR_KEY) || 'gfm';
@@ -98,50 +100,56 @@
     const currentWindow = window.__TAURI__.window?.getCurrentWindow?.();
     return {
       kind: 'tauri',
-      async init({ onOpen, onOpenError, onCloseRequested }) {
+      async init({ onOpen, onOpenPath, onOpenError, onCloseRequested }) {
         // Second instance launched with a file → single-instance plugin forwards the path.
-        await listen('open-file', async (e) => {
+        await listen('open-file', (e) => {
           const path = typeof e.payload === 'string' ? e.payload : e.payload?.path;
-          if (!path) return;
-          try {
-            onOpen(await invoke('open_path', { path }));
-          } catch (err) {
-            onOpenError(err);
-          }
+          if (path) onOpenPath(path);
         });
         // File dropped onto the window (Tauri emits paths; we take the first markdown-ish one).
-        await listen('tauri://drag-drop', async (e) => {
+        await listen('tauri://drag-drop', (e) => {
           const paths = e.payload?.paths || [];
           const path = paths.find((p) => /\.(md|markdown|txt)$/i.test(p)) || paths[0];
-          if (!path) return;
-          try {
-            onOpen(await invoke('open_path', { path }));
-          } catch (err) {
-            onOpenError(err);
-          }
+          if (path) onOpenPath(path);
         });
         // Intercept the OS close button so unsaved edits can be confirmed. Requires
         // `core:window:allow-destroy` (the JS API destroys the window when not prevented).
+        // Rust prevents the close whenever a JS listener exists, so the handler must never
+        // throw — otherwise destroy() is skipped and the X button stops working.
         if (currentWindow?.onCloseRequested) {
           try {
             await currentWindow.onCloseRequested(async (event) => {
-              const proceed = await onCloseRequested();
+              let proceed = true;
+              try { proceed = await onCloseRequested(); } catch (err) { console.error('[close] guard failed:', err); }
               if (!proceed) event.preventDefault();
             });
           } catch (err) {
             console.warn('[host] close-requested hook unavailable:', err);
           }
         }
+        // Load the launch file BEFORE showing the window (no blank flash), but report a
+        // failure only AFTER it is visible — a modal alert on a hidden window looks hung.
+        let launchError = null;
         try {
           const launch = await invoke('get_launch_file');
-          if (launch) onOpen(launch);
+          if (launch) await onOpen(launch);
         } catch (err) {
-          onOpenError(err);
+          launchError = err;
         }
         await invoke('frontend_ready');
+        if (launchError) onOpenError(launchError);
+      },
+      async openPath(path) {
+        return await invoke('open_path', { path });
       },
       async setWindowTitle(title) {
         if (currentWindow?.setTitle) await currentWindow.setTitle(title);
+      },
+      async setZoom(factor) {
+        // Needs `core:webview:allow-set-webview-zoom`. Native zoom hotkeys are disabled in
+        // tauri.conf.json so this is the single owner of the zoom level.
+        const webview = window.__TAURI__.webview?.getCurrentWebview?.();
+        if (webview?.setZoom) await webview.setZoom(factor);
       },
       async openFile() {
         const { open } = window.__TAURI__.dialog;
@@ -225,9 +233,15 @@
         void onCloseRequested;
       },
       async setWindowTitle() {/* document.title is the window title in a browser */},
+      async setZoom(factor) {
+        document.documentElement.style.zoom = String(factor);
+      },
       async openFile() {
         console.info('[host:mock] would open a file picker');
         return null;
+      },
+      async openPath(path) {
+        throw new Error('mock host cannot read ' + path);
       },
       async save(path, content, format) {
         console.info('[host:mock] would save', path, content.length, 'bytes', format || MOCK_FORMAT);
@@ -319,6 +333,17 @@
   function reportOpenError(err) {
     console.error('[open] failed:', err);
     alert('Could not open file:\n\n' + (err?.message || err));
+  }
+
+  /** Open a host-supplied path (drag-drop, second instance) with the same unsaved-edits
+   *  confirmation as Ctrl+O. */
+  async function openPathGuarded(path) {
+    try {
+      if (!(await confirmDiscardIfDirty('Open another file'))) return;
+      await applyLoadedFile(await host.openPath(path));
+    } catch (err) {
+      reportOpenError(err);
+    }
   }
 
   async function openFileViaDialog() {
@@ -440,9 +465,14 @@
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
+  // Renders are async (IPC round trip). Only the most recently requested render may
+  // touch the DOM, so a slow debounced render cannot overwrite a newer one.
+  let renderSeq = 0;
   async function renderPreview(text) {
+    const seq = ++renderSeq;
     try {
       const { html, features } = await host.renderMarkdown(text || '');
+      if (seq !== renderSeq) return;   // superseded
       $preview.innerHTML = html;
       renderFeatureBadges(features);
       await renderMathIfPresent($preview);
@@ -623,15 +653,64 @@
   }
 
   let flashTimer = null;
-  function flashCopied(folder) {
+  function flashTitle(message) {
     $title.dataset.flashing = '1';
-    $title.textContent = `Copied: ${folder}`;
+    $title.textContent = message;
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => {
       delete $title.dataset.flashing;
       updateTitle();
     }, 1400);
   }
+  function flashCopied(folder) {
+    flashTitle(`Copied: ${folder}`);
+  }
+
+  // ------------------------------------------------------------------
+  // Zoom (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel), persisted across launches.
+  // Owned here rather than by the WebView's built-in hotkeys so the level can be
+  // stored and restored; the native hotkeys are turned off in tauri.conf.json.
+  // ------------------------------------------------------------------
+  const ZOOM_KEY = 'mdview.zoom';
+  const ZOOM_LEVELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+  let zoomLevel = readStoredZoom();
+
+  function readStoredZoom() {
+    try {
+      const z = parseFloat(localStorage.getItem(ZOOM_KEY));
+      if (Number.isFinite(z) && z >= ZOOM_LEVELS[0] && z <= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]) return z;
+    } catch (_) {/* ignore */}
+    return 1;
+  }
+
+  async function applyZoom(factor, { announce = true } = {}) {
+    zoomLevel = factor;
+    try { localStorage.setItem(ZOOM_KEY, String(factor)); } catch (_) {/* ignore */}
+    try {
+      await host.setZoom(factor);
+    } catch (err) {
+      console.warn('[zoom] failed:', err);
+    }
+    if (announce) flashTitle(`Zoom ${Math.round(factor * 100)}%`);
+  }
+
+  function stepZoom(direction) {
+    // Snap to the nearest preset, then move one step.
+    let idx = 0;
+    let best = Infinity;
+    ZOOM_LEVELS.forEach((z, i) => {
+      const d = Math.abs(z - zoomLevel);
+      if (d < best) { best = d; idx = i; }
+    });
+    const next = ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, Math.max(0, idx + direction))];
+    if (next !== zoomLevel) applyZoom(next);
+  }
+
+  document.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    if (e.deltaY !== 0) stepZoom(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
 
   async function copyParentToClipboard() {
     if (!state.path) return;
@@ -662,10 +741,20 @@
   //   Ctrl+S → Save            Ctrl+Shift+S → Save As (always prompts)
   //   Ctrl+O → Open…           Ctrl+E       → toggle edit/view
   //   Ctrl+H → Versions bar    Ctrl+P       → Print     Ctrl+Shift+P → Print View
+  //   Ctrl+= / Ctrl+- / Ctrl+0 → zoom in / out / reset (persisted)
   document.addEventListener('keydown', (e) => {
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
-    if (ctrl && !e.shiftKey && key === 's') {
+    if (ctrl && (e.key === '=' || e.key === '+')) {
+      e.preventDefault();
+      stepZoom(1);
+    } else if (ctrl && (e.key === '-' || e.key === '_')) {
+      e.preventDefault();
+      stepZoom(-1);
+    } else if (ctrl && !e.shiftKey && e.key === '0') {
+      e.preventDefault();
+      applyZoom(1);
+    } else if (ctrl && !e.shiftKey && key === 's') {
       e.preventDefault();
       save();
     } else if (ctrl && e.shiftKey && key === 's') {
@@ -1060,11 +1149,17 @@
   // Initial render: show welcome until host hands us a file.
   // ------------------------------------------------------------------
   setDirty(false);   // sync Save button (enabled: no path → Save acts as Save As) + titles
-  renderPreview('# Welcome\n\nOpen a `.md` file from File Explorer, or toggle **Edit** to start writing.');
+  if (zoomLevel !== 1) applyZoom(zoomLevel, { announce: false });   // restore last zoom before first paint
+  renderPreview('# Welcome\n\nOpen a `.md` file from File Explorer, press `Ctrl+O`, drop one onto this window, or toggle **Edit** to start writing.');
 
   // Kick the host. Tauri host will call onOpen if launched with a file,
   // then call frontend_ready so the window appears.
-  host.init({ onOpen: applyLoadedFile, onOpenError: reportOpenError, onCloseRequested }).catch((err) => {
+  host.init({
+    onOpen: applyLoadedFile,
+    onOpenPath: openPathGuarded,
+    onOpenError: reportOpenError,
+    onCloseRequested,
+  }).catch((err) => {
     console.error('[host:init] failed:', err);
   });
 })();
