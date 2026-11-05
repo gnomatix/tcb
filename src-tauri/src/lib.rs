@@ -370,7 +370,36 @@ fn snapshot_save_impl(app: &AppHandle, path: &Path, content: &str) -> Result<(),
         ts += 1;
         file = dir.join(format!("{}.md", ts));
     }
-    std::fs::write(file, content).map_err(|e| e.to_string())
+    std::fs::write(file, content).map_err(|e| e.to_string())?;
+    prune_snapshot_dir(&dir, MAX_SNAPSHOTS_PER_FILE);
+    Ok(())
+}
+
+/// Every save of a non-git file writes a full copy, so an editing session can leave
+/// hundreds of snapshots behind. Keep the newest N per document.
+const MAX_SNAPSHOTS_PER_FILE: usize = 200;
+
+/// Delete the oldest `<timestamp>.md` snapshots in `dir` beyond `keep`. Best-effort:
+/// unrelated files are ignored and removal errors are not fatal.
+fn prune_snapshot_dir(dir: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    let mut stamps: Vec<(i64, PathBuf)> = entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name();
+            let ts: i64 = name.to_str()?.strip_suffix(".md")?.parse().ok()?;
+            Some((ts, e.path()))
+        })
+        .collect();
+    if stamps.len() <= keep {
+        return;
+    }
+    stamps.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    for (_, path) in stamps.into_iter().skip(keep) {
+        if let Err(err) = std::fs::remove_file(&path) {
+            eprintln!("[snapshot] prune failed for {}: {}", path.display(), err);
+        }
+    }
 }
 
 /// Take a snapshot of arbitrary content for a file path, regardless of whether the file
@@ -531,6 +560,28 @@ mod tests {
         let f = read_file(&crlf).unwrap();
         assert_eq!(f.content, "# T\n\nx\n");
         assert_eq!(f.format, TextFormat { encoding: textfile::Encoding::Utf8, bom: true, eol: textfile::LineEnding::Crlf });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_keeps_newest_and_ignores_other_files() {
+        let dir = std::env::temp_dir().join(format!("tcb-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for ts in [100, 300, 200, 500, 400] {
+            std::fs::write(dir.join(format!("{}.md", ts)), "x").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), "keep me").unwrap();
+
+        prune_snapshot_dir(&dir, 10);   // under the cap → untouched
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 6);
+
+        prune_snapshot_dir(&dir, 2);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["400.md", "500.md", "notes.txt"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

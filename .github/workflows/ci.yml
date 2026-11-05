@@ -1,0 +1,58 @@
+name: ci
+
+# Compile + unit-test the Rust crate on the shipping target (Windows) and run the
+# front-end smoke tests in headless Chromium. release.yml only runs on tags, so this
+# is what gives every branch push a Windows build signal.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-windows:
+    name: cargo test (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Unit tests (markdown rendering, text-format round trip, git/snapshot helpers).
+      - name: cargo test --lib
+        working-directory: src-tauri
+        run: cargo test --lib --locked
+
+      # Make sure the binary target (main.rs + tauri_build context) still compiles too.
+      - name: cargo build (debug)
+        working-directory: src-tauri
+        run: cargo build --locked
+
+  ui-smoke:
+    name: WebAssets smoke tests (headless Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No lockfile by design (the repo has no node build); install just Playwright.
+      - name: install Playwright + Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.50.1
+          npx playwright install --with-deps chromium
+
+      - name: node --test
+        run: node --test "tests/ui/*.test.js"
