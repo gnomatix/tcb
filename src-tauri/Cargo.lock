@@ -4144,6 +4144,7 @@ dependencies = [
 name = "tcb"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "pulldown-cmark",
  "serde",
  "serde_json",

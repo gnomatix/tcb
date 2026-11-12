@@ -454,9 +454,13 @@ fn export_typeset_pdf(input: String, output: String) -> Result<(), String> {
 
 /// Render markdown to HTML and detect notable features in one pass.
 /// See [`markdown::render`] for the details (extension set, HTML escaping, pagebreaks).
+///
+/// `base_dir` is the folder of the open document (the frontend passes `parentDir(path)`,
+/// or nothing for an unsaved buffer). Relative image references are resolved against it
+/// and inlined as `data:` URIs so they display in the WebView.
 #[tauri::command]
-fn render_markdown(text: String) -> markdown::Rendered {
-    markdown::render(&text)
+fn render_markdown(text: String, base_dir: Option<String>) -> markdown::Rendered {
+    markdown::render(&text, base_dir.as_deref().map(Path::new))
 }
 
 /// Frontend calls this once it has painted its initial state.

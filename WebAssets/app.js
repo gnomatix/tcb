@@ -188,9 +188,12 @@
         // Default browser / mail client. Needs `opener:default` (http, https, mailto, tel).
         await window.__TAURI__.opener.openUrl(url);
       },
-      async renderMarkdown(text) {
+            async renderMarkdown(text, baseDir) {
         // Rust pulldown-cmark with all extensions + HTML escaping + feature detection.
-        return await invoke('render_markdown', { text });
+        // baseDir (the document's folder, or null) lets relative image paths be inlined
+        // as data: URIs — the WebView's origin is the app, so a plain relative src
+        // could never load from disk.
+        return await invoke('render_markdown', { text, baseDir: baseDir || null });
       },
       async confirm(message, opts) {
         const { ask } = window.__TAURI__.dialog;
@@ -271,7 +274,8 @@
       async openExternal(url) {
         window.open(url, '_blank', 'noopener');
       },
-      async renderMarkdown(text) {
+            async renderMarkdown(text, _baseDir) {
+        // No filesystem in a browser: baseDir is ignored, relative images stay as written.
         return { html: md.render(text), features: [] };
       },
       async confirm(message) {
@@ -487,7 +491,11 @@
   async function renderPreview(text) {
     const seq = ++renderSeq;
     try {
-      const { html, features } = await host.renderMarkdown(text || '');
+      // The document's folder, so `![](images/fig.png)` can be resolved and inlined
+      // by the host. An unsaved buffer has no folder. (parentDir is a function
+      // declaration further down — hoisted, so it is callable from here.)
+      const baseDir = state.path ? parentDir(state.path) : null;
+      const { html, features } = await host.renderMarkdown(text || '', baseDir);
       if (seq !== renderSeq) return;   // superseded
       $preview.innerHTML = html;
       addHeadingIds($preview);

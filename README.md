@@ -19,7 +19,8 @@ can typeset a polished PDF.
   <img src="assets/images/tcb-md-hero-panel.png" alt="TCB, M.D. — Markdown, handled." width="720">
 </p>
 
-- **Open & preview Markdown** — clean CommonMark rendering, instant on launch.
+- **Open & preview Markdown** — clean CommonMark rendering, instant on launch. Local images
+  (`![](images/fig.png)`, relative to the document) display inline.
   Open from File Explorer, `Ctrl+O`, or drop a file onto the window. Links work the
   way you'd expect: `#heading` anchors scroll, relative `.md` links open in the app,
   web links open in your browser.

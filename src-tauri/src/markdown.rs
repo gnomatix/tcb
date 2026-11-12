@@ -1,6 +1,8 @@
 //! Markdown rendering and feature detection (pulldown-cmark). No Tauri dependency,
 //! so the whole pipeline is unit-testable; `lib.rs` exposes it as a command.
 
+use std::path::{Component, Path, PathBuf};
+
 use serde::Serialize;
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
@@ -20,8 +22,13 @@ pub struct Rendered {
 /// Explicit `<!-- pagebreak -->` markers in the source are turned into
 /// `<hr class="mdview-pagebreak" />` so CSS / paged.js / native print can act on them.
 /// Markers inside fenced code blocks or inline code spans are left as literal text.
-pub fn render(text: &str) -> Rendered {
-    use pulldown_cmark::{html, Event, Options, Parser};
+///
+/// `base_dir` is the folder of the document being rendered. Images whose destination
+/// is a relative path (`![](images/fig.png)`) are resolved against it and inlined as
+/// `data:` URIs, because the WebView's origin is the app, not the document's folder,
+/// so a plain relative `src` can never load. See [`inline_local_image`] for the rules.
+pub fn render(text: &str, base_dir: Option<&Path>) -> Rendered {
+    use pulldown_cmark::{html, Event, Options, Parser, Tag};
 
     // Pre-process: rewrite `<!-- pagebreak -->` (with flexible inner whitespace) into a
     // unique paragraph token that survives parsing without being escaped as raw HTML.
@@ -49,6 +56,15 @@ pub fn render(text: &str) -> Rendered {
         // visible `&lt;b&gt;` entities in the preview (double escaping).
         Event::Html(html) => Event::Text(html),
         Event::InlineHtml(html) => Event::Text(html),
+        // Local images: swap a relative (or absolute local) path for a data: URI so the
+        // WebView can actually display it. Anything that can't be inlined is left as is.
+        Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+            let dest_url = match inline_local_image(&dest_url, base_dir) {
+                Some(data_uri) => data_uri.into(),
+                None => dest_url,
+            };
+            Event::Start(Tag::Image { link_type, dest_url, title, id })
+        }
         other => other,
     });
 
@@ -285,6 +301,163 @@ fn inline_code_spans(text: &str, from: usize, to: usize, spans: &mut Vec<CodeSpa
     }
 }
 
+// ---------------------------------------------------------------------------
+// Local image inlining
+// ---------------------------------------------------------------------------
+
+/// Largest image file that is inlined. Anything bigger is left as a plain path
+/// (which will not display) rather than ballooning the HTML sent over IPC.
+pub const MAX_INLINE_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Turn an image destination into a `data:` URI when it names a local file.
+///
+/// Returns `None` (leave the destination untouched) when:
+/// - the destination is a URL (`http:`, `https:`, `data:`, `file:`, `tauri:`, any
+///   other scheme) or protocol-relative (`//host/…`),
+/// - it is relative but `base_dir` is `None`,
+/// - after `..` normalization it escapes `base_dir`,
+/// - the file does not exist, is not a regular file, is larger than
+///   [`MAX_INLINE_IMAGE_BYTES`], or has an extension that isn't a known image type.
+///
+/// Absolute local paths (`/x/y.png`, `C:\x\y.png`) are inlined too when the file
+/// exists; opening a document is already an act of trust in that document's author,
+/// and the result is a picture, not code.
+pub fn inline_local_image(dest: &str, base_dir: Option<&Path>) -> Option<String> {
+    let path = resolve_image_path(dest, base_dir)?;
+    let mime = image_mime_for_path(&path)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_INLINE_IMAGE_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    Some(data_uri(mime, &bytes))
+}
+
+/// Resolve an image destination to a filesystem path, or `None` when it is not a
+/// local file reference that may be read (see [`inline_local_image`]).
+pub fn resolve_image_path(dest: &str, base_dir: Option<&Path>) -> Option<PathBuf> {
+    let dest = dest.trim();
+    if dest.is_empty() || dest.starts_with("//") || has_url_scheme(dest) {
+        return None;
+    }
+    let decoded = percent_decode(dest);
+    let p = Path::new(&decoded);
+    if is_absolute_local_path(&decoded) {
+        return Some(p.to_path_buf());
+    }
+    let base = base_dir?;
+    // Lexically normalize: `.` is dropped, `..` pops. Popping past the start means the
+    // reference escapes the document folder — refuse it.
+    let mut rel = PathBuf::new();
+    let mut depth = 0usize;
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::Normal(seg) => {
+                rel.push(seg);
+                depth += 1;
+            }
+            Component::ParentDir => {
+                if depth == 0 {
+                    return None;
+                }
+                rel.pop();
+                depth -= 1;
+            }
+            // Only reachable for odd inputs (e.g. a drive prefix on Windows that
+            // `is_absolute_local_path` didn't classify). Refuse rather than guess.
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if depth == 0 {
+        return None; // resolved to the folder itself, not a file
+    }
+    Some(base.join(rel))
+}
+
+/// `scheme:` per RFC 3986: a letter followed by letters, digits, `+`, `-`, `.`, then a
+/// colon. A single letter before the colon (`C:\…`) is a Windows drive, not a scheme.
+fn has_url_scheme(s: &str) -> bool {
+    let Some(colon) = s.find(':') else { return false; };
+    let scheme = &s[..colon];
+    let mut chars = scheme.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    if scheme.len() < 2 {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// Absolute on this platform, or Windows-style absolute (`C:\`, `C:/`, `\\server\share`)
+/// regardless of platform so a document authored on Windows behaves the same everywhere.
+fn is_absolute_local_path(s: &str) -> bool {
+    if Path::new(s).is_absolute() {
+        return true;
+    }
+    let b = s.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || s.starts_with("\\\\")
+}
+
+/// Decode `%XX` escapes (`%20` → space). Malformed escapes are kept literally. Invalid
+/// UTF-8 after decoding is replaced rather than rejected: a filename that doesn't
+/// decode cleanly simply won't be found on disk.
+pub fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_owned();
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// MIME type for a known raster/vector image extension (case-insensitive).
+pub fn image_mime_for_extension(ext: &str) -> Option<&'static str> {
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
+fn image_mime_for_path(path: &Path) -> Option<&'static str> {
+    image_mime_for_extension(path.extension()?.to_str()?)
+}
+
+/// `data:<mime>;base64,<payload>`.
+pub fn data_uri(mime: &str, bytes: &[u8]) -> String {
+    use base64::Engine;
+    let mut out = String::with_capacity(bytes.len() * 4 / 3 + mime.len() + 16);
+    out.push_str("data:");
+    out.push_str(mime);
+    out.push_str(";base64,");
+    base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut out);
+    out
+}
+
 pub fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -453,7 +626,7 @@ mod tests {
 
     #[test]
     fn raw_html_is_escaped_not_rendered() {
-        let r = render("hello <script>alert(1)</script> <b>x</b>");
+        let r = render("hello <script>alert(1)</script> <b>x</b>", None);
         assert!(!r.html.contains("<script>"), "{}", r.html);
         assert!(r.html.contains("&lt;script&gt;"), "{}", r.html);
         assert!(!r.html.contains("<b>"), "{}", r.html);
@@ -463,7 +636,7 @@ mod tests {
 
     #[test]
     fn block_html_is_escaped() {
-        let r = render("<style>body{display:none}</style>\n\ntext");
+        let r = render("<style>body{display:none}</style>\n\ntext", None);
         assert!(!r.html.contains("<style>"), "{}", r.html);
         assert!(r.html.contains("&lt;style&gt;"), "{}", r.html);
     }
@@ -471,7 +644,7 @@ mod tests {
     #[test]
     fn pagebreak_marker_becomes_hr() {
         for src in ["a\n\n<!-- pagebreak -->\n\nb", "a\n\n<!--pagebreak-->\n\nb", "a\n\n<!--   pagebreak   -->\n\nb"] {
-            let r = render(src);
+            let r = render(src, None);
             assert!(r.html.contains("<hr class=\"mdview-pagebreak\" />"), "{src:?} → {}", r.html);
             assert!(!r.html.contains(PAGEBREAK_PLACEHOLDER), "{}", r.html);
             assert!(r.features.contains(&"pagebreaks".to_string()));
@@ -480,7 +653,7 @@ mod tests {
 
     #[test]
     fn other_comments_are_left_alone_and_escaped() {
-        let r = render("x <!-- note --> y");
+        let r = render("x <!-- note --> y", None);
         assert!(r.html.contains("&lt;!-- note --&gt;"), "{}", r.html);
         assert!(!r.html.contains("mdview-pagebreak"));
         assert!(!r.features.contains(&"pagebreaks".to_string()));
@@ -502,7 +675,7 @@ mod tests {
 
     #[test]
     fn gfm_table_and_tasklist_render() {
-        let r = render("| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n- [ ] todo\n");
+        let r = render("| a | b |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n- [ ] todo\n", None);
         assert!(r.html.contains("<table>"), "{}", r.html);
         assert!(r.html.contains("type=\"checkbox\""), "{}", r.html);
         assert_eq!(r.features, vec!["tasklists", "tables"]);
@@ -510,7 +683,7 @@ mod tests {
 
     #[test]
     fn math_spans_are_emitted_for_katex() {
-        let r = render("Inline $E=mc^2$ and\n\n$$\n\\int x\n$$\n");
+        let r = render("Inline $E=mc^2$ and\n\n$$\n\\int x\n$$\n", None);
         assert!(r.html.contains("class=\"math math-inline\""), "{}", r.html);
         assert!(r.html.contains("class=\"math math-display\""), "{}", r.html);
         assert!(r.features.contains(&"math".to_string()));
@@ -550,7 +723,7 @@ mod tests {
 
     #[test]
     fn empty_input_renders_empty() {
-        let r = render("");
+        let r = render("", None);
         assert_eq!(r.html, "");
         assert!(r.features.is_empty());
     }
@@ -708,7 +881,7 @@ mod tests {
     fn pagebreak_marker_inside_fence_stays_literal() {
         let src = "a\n\n```html\n<!-- pagebreak -->\n```\n\nb\n";
         assert_eq!(rewrite_pagebreak_markers(src), src);
-        let r = render(src);
+        let r = render(src, None);
         assert!(!r.html.contains("mdview-pagebreak"), "{}", r.html);
         assert!(!r.html.contains(PAGEBREAK_PLACEHOLDER), "{}", r.html);
         assert!(r.html.contains("<code class=\"language-html\">&lt;!-- pagebreak --&gt;"), "{}", r.html);
@@ -719,7 +892,7 @@ mod tests {
     fn pagebreak_marker_inside_inline_code_stays_literal() {
         let src = "Write `<!-- pagebreak -->` to break.";
         assert_eq!(rewrite_pagebreak_markers(src), src);
-        let r = render(src);
+        let r = render(src, None);
         assert!(r.html.contains("<code>&lt;!-- pagebreak --&gt;</code>"), "{}", r.html);
         assert!(!r.html.contains("mdview-pagebreak"), "{}", r.html);
         assert!(!r.features.contains(&"pagebreaks".to_string()));
@@ -728,9 +901,213 @@ mod tests {
     #[test]
     fn pagebreak_marker_outside_code_still_rewritten_alongside_code_copy() {
         let src = "Use `<!-- pagebreak -->` like so:\n\n<!-- pagebreak -->\n\nnext page\n";
-        let r = render(src);
+        let r = render(src, None);
         assert_eq!(r.html.matches("<hr class=\"mdview-pagebreak\" />").count(), 1, "{}", r.html);
         assert!(r.html.contains("<code>&lt;!-- pagebreak --&gt;</code>"), "{}", r.html);
         assert!(r.features.contains(&"pagebreaks".to_string()));
+    }
+
+    // ----- local image inlining -----
+
+    /// 8-byte PNG signature. Enough for the inliner (it never decodes pixels), and its
+    /// base64 form is a fixed string we can assert on.
+    const PNG_SIG: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
+    const PNG_SIG_B64: &str = "iVBORw0KGgo=";
+
+    /// Fresh temp dir per test (unique by name + pid) with `images/fig.png` and
+    /// `my fig.png` inside it. Caller removes it.
+    fn image_fixture(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tcb-img-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("images")).unwrap();
+        std::fs::write(dir.join("images").join("fig.png"), PNG_SIG).unwrap();
+        std::fs::write(dir.join("my fig.png"), PNG_SIG).unwrap();
+        dir
+    }
+
+    #[test]
+    fn relative_image_is_inlined_as_data_uri() {
+        let dir = image_fixture("rel");
+        let r = render("![alt](images/fig.png)", Some(&dir));
+        let expected = format!("src=\"data:image/png;base64,{}\"", PNG_SIG_B64);
+        assert!(r.html.contains(&expected), "{}", r.html);
+        assert!(r.html.contains("alt=\"alt\""), "{}", r.html);
+        assert!(!r.html.contains("images/fig.png"), "{}", r.html);
+
+        // `./` prefix and a nested `..` that stays inside the folder both resolve.
+        let r = render("![](./images/fig.png) ![](images/../images/fig.png)", Some(&dir));
+        assert_eq!(r.html.matches(PNG_SIG_B64).count(), 2, "{}", r.html);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn percent_encoded_filename_is_decoded() {
+        let dir = image_fixture("pct");
+        let r = render("![](my%20fig.png)", Some(&dir));
+        assert!(r.html.contains(PNG_SIG_B64), "{}", r.html);
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        assert_eq!(percent_decode("100%"), "100%");          // dangling % kept
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");        // malformed kept
+        assert_eq!(percent_decode("plain"), "plain");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_file_is_left_untouched() {
+        let dir = image_fixture("missing");
+        let r = render("![x](images/nope.png)", Some(&dir));
+        assert!(r.html.contains("src=\"images/nope.png\""), "{}", r.html);
+        assert!(!r.html.contains("data:"), "{}", r.html);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn urls_are_left_untouched() {
+        let dir = image_fixture("urls");
+        for src in [
+            "http://example.com/fig.png",
+            "https://example.com/fig.png",
+            "data:image/png;base64,AAAA",
+            "file:///etc/fig.png",
+            "tauri://localhost/fig.png",
+            "//cdn.example.com/fig.png",
+        ] {
+            let r = render(&format!("![]({})", src), Some(&dir));
+            assert!(r.html.contains(&format!("src=\"{}\"", src)), "{src} → {}", r.html);
+            assert!(resolve_image_path(src, Some(&dir)).is_none(), "{src}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn path_escaping_base_dir_is_rejected() {
+        let dir = image_fixture("escape");
+        // Put a real image one level above so the test proves the path is refused,
+        // not merely not found.
+        let parent = dir.parent().unwrap().to_path_buf();
+        let outside = parent.join(format!("tcb-outside-{}.png", std::process::id()));
+        std::fs::write(&outside, PNG_SIG).unwrap();
+        let name = outside.file_name().unwrap().to_str().unwrap().to_owned();
+
+        for src in [
+            format!("../{}", name),
+            format!("images/../../{}", name),
+            "../../etc/passwd".to_string(),
+            "../../../../../../etc/passwd".to_string(),
+        ] {
+            let r = render(&format!("![]({})", src), Some(&dir));
+            assert!(!r.html.contains("data:"), "{src} → {}", r.html);
+            assert!(resolve_image_path(&src, Some(&dir)).is_none(), "{src}");
+        }
+        // Sanity: the same file IS readable through a non-escaping path.
+        assert!(inline_local_image(outside.to_str().unwrap(), None).is_some());
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_base_dir_leaves_relative_untouched_but_absolute_still_inlines() {
+        let dir = image_fixture("nobase");
+        let r = render("![](images/fig.png)", None);
+        assert!(r.html.contains("src=\"images/fig.png\""), "{}", r.html);
+
+        let abs = dir.join("images").join("fig.png");
+        let r = render(&format!("![]({})", abs.display()), None);
+        assert!(r.html.contains(PNG_SIG_B64), "{}", r.html);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_image_path_joins_under_base() {
+        let base = Path::new("/docs");
+        assert_eq!(resolve_image_path("images/fig.png", Some(base)), Some(PathBuf::from("/docs/images/fig.png")));
+        assert_eq!(resolve_image_path("./a.jpg", Some(base)), Some(PathBuf::from("/docs/a.jpg")));
+        assert_eq!(resolve_image_path("a/./b/../c.gif", Some(base)), Some(PathBuf::from("/docs/a/c.gif")));
+        assert_eq!(resolve_image_path("", Some(base)), None);
+        assert_eq!(resolve_image_path(".", Some(base)), None);
+        assert_eq!(resolve_image_path("images/fig.png", None), None);
+        // Windows drive paths are recognised as absolute on every platform.
+        assert_eq!(resolve_image_path(r"C:\pics\a.png", Some(base)), Some(PathBuf::from(r"C:\pics\a.png")));
+        assert_eq!(resolve_image_path("C:/pics/a.png", Some(base)), Some(PathBuf::from("C:/pics/a.png")));
+        assert_eq!(resolve_image_path(r"\\server\share\a.png", Some(base)), Some(PathBuf::from(r"\\server\share\a.png")));
+    }
+
+    #[test]
+    fn url_scheme_detection() {
+        for s in ["http://x", "HTTPS://x", "data:,x", "file:///x", "tauri://x", "mailto:a@b", "x-app+1.0:foo"] {
+            assert!(has_url_scheme(s), "{s}");
+        }
+        for s in ["C:\\x", "c:/x", "images/fig.png", "", ":x", "1a:b", "a b:c", "no-colon"] {
+            assert!(!has_url_scheme(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn size_cap_is_respected() {
+        let dir = image_fixture("cap");
+        let big = dir.join("big.png");
+        // Sparse-ish: set_len allocates lazily on every mainstream filesystem, so this
+        // costs no real disk and no time.
+        let f = std::fs::File::create(&big).unwrap();
+        f.set_len(MAX_INLINE_IMAGE_BYTES + 1).unwrap();
+        drop(f);
+        assert!(inline_local_image("big.png", Some(&dir)).is_none());
+
+        let exact = dir.join("exact.png");
+        let f = std::fs::File::create(&exact).unwrap();
+        f.set_len(MAX_INLINE_IMAGE_BYTES).unwrap();
+        drop(f);
+        let uri = inline_local_image("exact.png", Some(&dir)).expect("file at the cap is inlined");
+        assert!(uri.starts_with("data:image/png;base64,"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_extension_and_directories_are_not_inlined() {
+        let dir = image_fixture("ext");
+        std::fs::write(dir.join("notes.txt"), "hello").unwrap();
+        assert!(inline_local_image("notes.txt", Some(&dir)).is_none());
+        assert!(inline_local_image("images", Some(&dir)).is_none());
+        let r = render("![](notes.txt)", Some(&dir));
+        assert!(r.html.contains("src=\"notes.txt\""), "{}", r.html);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mime_mapping() {
+        assert_eq!(image_mime_for_extension("png"), Some("image/png"));
+        assert_eq!(image_mime_for_extension("PNG"), Some("image/png"));
+        assert_eq!(image_mime_for_extension("jpg"), Some("image/jpeg"));
+        assert_eq!(image_mime_for_extension("JPEG"), Some("image/jpeg"));
+        assert_eq!(image_mime_for_extension("gif"), Some("image/gif"));
+        assert_eq!(image_mime_for_extension("webp"), Some("image/webp"));
+        assert_eq!(image_mime_for_extension("svg"), Some("image/svg+xml"));
+        assert_eq!(image_mime_for_extension("bmp"), Some("image/bmp"));
+        assert_eq!(image_mime_for_extension("ico"), Some("image/x-icon"));
+        assert_eq!(image_mime_for_extension("avif"), Some("image/avif"));
+        assert_eq!(image_mime_for_extension("txt"), None);
+        assert_eq!(image_mime_for_extension("md"), None);
+        assert_eq!(image_mime_for_extension(""), None);
+    }
+
+    #[test]
+    fn data_uri_encoding() {
+        assert_eq!(data_uri("image/png", &PNG_SIG), format!("data:image/png;base64,{}", PNG_SIG_B64));
+        assert_eq!(data_uri("image/gif", b""), "data:image/gif;base64,");
+        assert_eq!(data_uri("image/gif", b"a"), "data:image/gif;base64,YQ==");
+        assert_eq!(data_uri("image/gif", b"ab"), "data:image/gif;base64,YWI=");
+        assert_eq!(data_uri("image/gif", b"abc"), "data:image/gif;base64,YWJj");
+    }
+
+    #[test]
+    fn raw_html_defang_is_unchanged_with_base_dir() {
+        let dir = image_fixture("defang");
+        let r = render("<img src=\"images/fig.png\"> ![](images/fig.png)", Some(&dir));
+        // The raw <img> tag is still shown as text (pulldown-cmark escapes < and > in text
+        // but leaves quotes alone); only the Markdown image is inlined.
+        assert!(r.html.contains("&lt;img src=\"images/fig.png\"&gt;"), "{}", r.html);
+        assert!(!r.html.contains("<img src=\"images/fig.png\">"), "{}", r.html);
+        assert_eq!(r.html.matches("data:image/png").count(), 1, "{}", r.html);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
