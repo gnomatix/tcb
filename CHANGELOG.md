@@ -3,6 +3,20 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## Unreleased
+
+### Fixed
+- Pressing `Ctrl+=` / `Ctrl+-` quickly could leave the window at an earlier zoom level than
+  the one shown and remembered: the zoom calls could complete out of order. They are now
+  applied in the order pressed. (Found by the new Windows end-to-end suite.)
+
+### Added
+- CI runs an end-to-end suite against the real `tcb.exe` on Windows WebView2 on every
+  push: opening and rendering, text-format round-trips on disk, images, links, zoom,
+  history, the second-instance hand-off, the unsaved-changes prompt and the native
+  Open / Save As dialogs appearing. It also installs the NSIS build silently and checks
+  the `.md` file association.
+
 ## 0.2.3 — 2026-11-13
 
 ### Fixed

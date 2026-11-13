@@ -864,15 +864,18 @@
     return 1;
   }
 
-  async function applyZoom(factor, { announce = true } = {}) {
+  // setZoom is an async IPC call; two quick key presses could complete out of order and
+  // leave the WebView at the earlier level while the stored level is the later one (seen
+  // on Windows in CI: stored 125%, applied 110%). Queue the calls so they apply in order.
+  let zoomQueue = Promise.resolve();
+  function applyZoom(factor, { announce = true } = {}) {
     zoomLevel = factor;
     try { localStorage.setItem(ZOOM_KEY, String(factor)); } catch (_) {/* ignore */}
-    try {
-      await host.setZoom(factor);
-    } catch (err) {
-      console.warn('[zoom] failed:', err);
-    }
     if (announce) flashTitle(`Zoom ${Math.round(factor * 100)}%`);
+    zoomQueue = zoomQueue
+      .then(() => host.setZoom(factor))
+      .catch((err) => console.warn('[zoom] failed:', err));
+    return zoomQueue;
   }
 
   function stepZoom(direction) {
