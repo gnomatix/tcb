@@ -109,6 +109,39 @@ jobs:
           TCB_EXE: ${{ runner.temp }}\tcb-e2e.exe
         run: node --test "tests/windows/*.test.mjs"
 
+      # Install the shipped NSIS build silently, then open a .md file through the Windows
+      # shell: the registered association must start the installed tcb.exe on that file.
+      - name: installer and .md file association
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          Get-Process tcb -ErrorAction SilentlyContinue | Stop-Process -Force
+          $setup = Get-ChildItem "src-tauri\target\release\bundle\nsis\*-setup.exe" | Select-Object -First 1
+          Write-Host "installing $($setup.Name)"
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $installed = Get-ChildItem "$env:LOCALAPPDATA\Programs","$env:LOCALAPPDATA","$env:ProgramFiles" -Recurse -Filter tcb.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notlike "*\target\*" } | Select-Object -First 1
+          if (-not $installed) { Write-Error "tcb.exe not found after install"; exit 1 }
+          Write-Host "installed: $($installed.FullName)"
+          $progId = (Get-ItemProperty -Path "HKCU:\Software\Classes\.md" -ErrorAction SilentlyContinue).'(default)'
+          if (-not $progId) { $progId = (Get-ItemProperty -Path "HKLM:\Software\Classes\.md" -ErrorAction SilentlyContinue).'(default)' }
+          Write-Host ".md progid: $progId"
+          if (-not $progId) { Write-Error ".md has no registered handler"; exit 1 }
+          $cmd = (Get-ItemProperty -Path "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+          Write-Host "open command: $cmd"
+          if ($cmd -notlike "*$($installed.Name)*") { Write-Error "open command does not start tcb.exe"; exit 1 }
+          $doc = Join-Path $env:RUNNER_TEMP "assoc-check.md"
+          Set-Content -Path $doc -Value "# Association check"
+          Start-Process -FilePath $doc
+          $proc = $null
+          for ($i = 0; $i -lt 30 -and -not $proc; $i++) {
+            Start-Sleep -Seconds 1
+            $proc = Get-CimInstance Win32_Process -Filter "Name = 'tcb.exe'" | Where-Object { $_.CommandLine -like "*assoc-check.md*" }
+          }
+          if (-not $proc) { Write-Error "opening a .md file did not start tcb.exe with it"; exit 1 }
+          Write-Host "shell open started: $($proc.CommandLine)"
+          Stop-Process -Id $proc.ProcessId -Force
+
   ui-smoke:
     name: WebAssets smoke tests (headless Chromium)
     # Pinned: ubuntu-latest moved to 26.04, which Playwright's browser installer
