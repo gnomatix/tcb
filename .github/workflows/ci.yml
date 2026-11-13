@@ -76,22 +76,8 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
 
-      # Drive the freshly built tcb.exe over WebDriver on real WebView2.
+      # Drive the freshly built tcb.exe on real WebView2 over the DevTools protocol.
       # See tests/windows/e2e.test.mjs for what is and is not covered.
-      - name: install a WebView2-matched msedgedriver
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/edgedriver"
-          cd "$RUNNER_TEMP/edgedriver"
-          if cargo install --git https://github.com/chippers/msedgedriver-tool && msedgedriver-tool; then
-            echo "msedgedriver from msedgedriver-tool (matches the installed WebView2)"
-          fi
-          if [ ! -f msedgedriver.exe ] && [ -n "$EDGEWEBDRIVER" ]; then
-            cp "$EDGEWEBDRIVER/msedgedriver.exe" . && echo "msedgedriver from the runner image"
-          fi
-          ls -la
-          ./msedgedriver.exe --version
-
       - name: launch tcb.exe directly (it must stay running)
         shell: pwsh
         run: |
@@ -100,24 +86,17 @@ jobs:
           $p.Refresh()
           if ($p.HasExited) { Write-Error "tcb.exe exited after launch with code $($p.ExitCode)"; exit 1 }
           Write-Host "tcb.exe still running after 10s (pid $($p.Id)); main window: '$($p.MainWindowTitle)'"
-          Stop-Process -Id $p.Id -Force
+          # Kill the whole tree: a surviving WebView2 browser process would be reused by the
+          # next launch and ignore that launch's --remote-debugging-port.
+          taskkill /PID $p.Id /T /F
+          Start-Sleep -Seconds 2
 
       - name: end-to-end checks on WebView2
         timeout-minutes: 15
         shell: bash
         env:
           TCB_EXE: ${{ github.workspace }}\src-tauri\target\release\tcb.exe
-          MSEDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
-          MSEDGEDRIVER_LOG: ${{ runner.temp }}\msedgedriver.log
         run: node --test "tests/windows/*.test.mjs"
-
-      - name: upload msedgedriver log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: msedgedriver-log-${{ github.sha }}
-          path: ${{ runner.temp }}\msedgedriver.log
-          if-no-files-found: ignore
 
   ui-smoke:
     name: WebAssets smoke tests (headless Chromium)
