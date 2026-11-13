@@ -110,6 +110,13 @@ async function openApp(file, { waitForLoad = true } = {}) {
         await sleep(250);
       }
     },
+    get exited() { return exited; },
+    /** Close the window through Tauri so WebView2 shuts down cleanly (storage flushed). */
+    async quit() {
+      send('Runtime.evaluate', { expression: 'window.__TAURI__.window.getCurrentWindow().destroy()' }).catch(() => {});
+      for (let i = 0; i < 100 && exited === null; i++) await sleep(100);
+      await app.close();
+    },
     async close() {
       try { ws.close(); } catch {}
       killTree(proc.pid);
@@ -132,6 +139,21 @@ async function openApp(file, { waitForLoad = true } = {}) {
 }
 
 const text = (app, sel) => app.eval(`return document.querySelector(${JSON.stringify(sel)})?.textContent ?? null;`);
+const key = (app, k, mods = {}) => app.eval(
+  `document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, ctrlKey: true, shiftKey: ${!!mods.shift}, bubbles: true }));`);
+/** Copy a fixture to a fresh file so tests that save never share a path. */
+let copyN = 0;
+function fresh(name) {
+  const dst = path.join(fixtures, `${path.parse(name).name}-${++copyN}${path.extname(name)}`);
+  fs.copyFileSync(path.join(fixtures, name), dst);
+  return dst;
+}
+/** Append a line in the editor and save with Ctrl+S; resolves once the dirty dot clears. */
+async function editAndSave(app, line) {
+  await app.eval(`const e = document.getElementById('editor'); e.value += ${JSON.stringify(line)}; e.dispatchEvent(new Event('input'));`);
+  await key(app, 's');
+  await app.waitFor(`return document.getElementById('dirtyDot').hidden;`, 'save to finish');
+}
 
 before(() => {
   if (skip) return;
@@ -147,6 +169,17 @@ before(() => {
   fs.writeFileSync(path.join(fixtures, 'images.md'),
     '# Images\n\n![local](images/fig.png)\n\n![escape](../../outside.png)\n\n![web](https://example.com/x.png)\n');
   fs.writeFileSync(path.join(fixtures, 'binary.md'), Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x81, 0x00]));
+  fs.writeFileSync(path.join(fixtures, 'crlf.md'), '# CRLF doc\r\n\r\nalpha\r\nbeta\r\n');
+  fs.writeFileSync(path.join(fixtures, 'abs-image.md'),
+    `# Abs\n\n![abs](<${path.join(fixtures, 'images', 'fig.png')}>)\n`);
+  // Links: a.md -> sub/b.md#details, plus missing / ignored / in-page links.
+  fs.mkdirSync(path.join(fixtures, 'sub'));
+  const filler = Array.from({ length: 80 }, (_, i) => `Paragraph ${i}.`).join('\n\n');
+  fs.writeFileSync(path.join(fixtures, 'sub', 'b.md'), `# B\n\n${filler}\n\n## Details\n\nHere.\n`);
+  fs.writeFileSync(path.join(fixtures, 'links.md'),
+    '# Links\n\n[toc](#far-heading) [b](sub/b.md#details) [missing](nope.md) [img](pic.png) [f](file:///C:/x.md)\n\n'
+    + filler + '\n\n## Far heading\n\nEnd.\n');
+  fs.writeFileSync(path.join(fixtures, 'sub', 'rel.md'), '# Relative\n\nopened via second instance\n');
 });
 
 after(() => {
@@ -270,5 +303,158 @@ test('Ctrl+E toggles edit mode and edits mark the document dirty', { skip }, asy
     const st = await app.eval(`return { dot: !document.getElementById('dirtyDot').hidden, title: document.title };`);
     assert.equal(st.dot, true);
     assert.ok(st.title.startsWith('• '), st.title);
+  } finally { await app.close(); }
+});
+
+test('saving keeps CRLF, UTF-8 BOM and UTF-16 LE byte-for-byte except the edit', { skip }, async () => {
+  for (const [name, decode, eol] of [
+    ['crlf.md', (b) => b.toString('utf8'), '\r\n'],
+    ['crlf-bom.md', (b) => b.toString('utf8'), '\r\n'],
+    ['utf16.md', (b) => b.subarray(2).toString('utf16le'), '\r\n'],
+  ]) {
+    const file = fresh(name);
+    const before = fs.readFileSync(file);
+    const app = await openApp(file);
+    try {
+      await editAndSave(app, '\nadded line');
+    } finally { await app.close(); }
+    const after = fs.readFileSync(file);
+    // Same leading bytes (BOM / UTF-16 BOM) and the original text is a prefix of the new text.
+    assert.deepEqual(after.subarray(0, 3), before.subarray(0, 3), name + ' lost its BOM');
+    const oldText = decode(before), newText = decode(after);
+    assert.ok(newText.startsWith(oldText.replace(/\uFEFF/, '')) || newText.startsWith(oldText), name + ': ' + JSON.stringify(newText));
+    assert.ok(newText.endsWith(eol + 'added line'), name + ': ' + JSON.stringify(newText.slice(-20)));
+    assert.ok(!/[^\r]\n/.test(newText), name + ' has a bare LF after save: ' + JSON.stringify(newText));
+  }
+});
+
+test('launching on a missing file shows the welcome page', { skip }, async () => {
+  const app = await openApp(path.join(fixtures, 'does-not-exist.md'), { waitForLoad: false });
+  try {
+    const h1 = await app.waitFor(`return document.querySelector('#preview h1')?.textContent;`, 'welcome render');
+    assert.equal(h1, 'Welcome');
+    assert.equal(await text(app, '#docTitle'), 'untitled.md');
+    assert.equal(app.exited, null, 'app must still be running');
+  } finally { await app.close(); }
+});
+
+test('native title gains a leading bullet when the document is dirty', { skip }, async () => {
+  const app = await openApp(fresh('crlf.md'));
+  try {
+    await app.eval(`const e = document.getElementById('editor'); e.value += 'x'; e.dispatchEvent(new Event('input'));`);
+    const t = await app.waitFor(`const t = await window.__TAURI__.window.getCurrentWindow().title(); return t.startsWith('• ') ? t : null;`, 'dirty native title');
+    assert.match(t, /^• crlf-\d+\.md — TCB, M\.D\.$/);
+  } finally { await app.close(); }
+});
+
+test('a second instance with a relative path opens it in the running window', { skip }, async () => {
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    const second = spawn(APP, ['rel.md'], { cwd: path.join(fixtures, 'sub'), stdio: 'ignore' });
+    const code = await new Promise((r) => second.on('exit', r));
+    assert.equal(code, 0, 'second instance should hand off and exit');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes('rel.md');`, 'forwarded file to open');
+    assert.equal(await text(app, '#preview h1'), 'Relative');
+  } finally { await app.close(); }
+});
+
+test('zoom set with Ctrl+= survives a relaunch', { skip }, async () => {
+  let app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    await key(app, '0');
+    await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1';`, 'zoom reset to 100%');
+    await sleep(300);
+    const dpr100 = await app.eval(`return window.devicePixelRatio;`);
+    await key(app, '=');
+    await key(app, '=');
+    assert.equal(await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1.25' ? '1.25' : null;`, 'zoom stored'), '1.25');
+    // The WebView2 zoom itself changed (device pixel ratio scales with page zoom).
+    await app.waitFor(`return Math.abs(window.devicePixelRatio / ${dpr100} - 1.25) < 0.02;`, 'webview zoom applied');
+  } finally { await app.quit(); }
+  app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    assert.equal(await app.eval(`return localStorage.getItem('mdview.zoom');`), '1.25');
+    await key(app, '0');
+    assert.equal(await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1' ? '1' : null;`, 'zoom reset'), '1');
+  } finally { await app.quit(); }
+});
+
+test('preview links: in-page, relative .md with fragment, missing, ignored', { skip }, async () => {
+  const app = await openApp(path.join(fixtures, 'links.md'));
+  const click = (label) => app.eval(`[...document.querySelectorAll('#preview a')].find(a => a.textContent === ${JSON.stringify(label)}).click();`);
+  try {
+    await app.eval(`window.__alerts = []; window.alert = (m) => window.__alerts.push(String(m));`);
+    // In-page fragment scrolls the preview.
+    await click('toc');
+    assert.ok(await app.waitFor(`const h = document.getElementById('far-heading'); const r = h.getBoundingClientRect(); return r.top < window.innerHeight && r.top >= 0;`, 'scroll to far heading'));
+    // Ignored links do nothing.
+    await click('img');
+    await click('f');
+    await sleep(500);
+    assert.match(await text(app, '#docTitle'), /links\.md/);
+    assert.equal(await app.eval(`return window.__alerts.length;`), 0);
+    // Missing .md target: error alert, document stays.
+    await click('missing');
+    const msg = await app.waitFor(`return window.__alerts[0] || null;`, 'missing-file alert');
+    assert.match(msg, /Could not open file/);
+    assert.match(await text(app, '#docTitle'), /links\.md/);
+    // Relative .md with fragment opens and scrolls to the heading.
+    await click('b');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes('b.md');`, 'b.md to open');
+    assert.ok(await app.waitFor(`const h = document.getElementById('details'); if (!h) return false; const r = h.getBoundingClientRect(); return r.top < window.innerHeight && r.top >= 0;`, 'scroll to Details'));
+  } finally { await app.close(); }
+});
+
+test('external links go through the opener permission', { skip }, async () => {
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    const r = await app.eval(`try { await window.__TAURI__.opener.openUrl('https://example.com/'); return 'ok'; } catch (e) { return 'ERR ' + e; }`);
+    assert.equal(r, 'ok');
+  } finally { await app.close(); }
+});
+
+test('history: backup-before-restore snapshot is listed for a git file; rapid saves keep every snapshot', { skip }, async () => {
+  // A throwaway git repo with two commits of doc.md in a subfolder.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'tcb-git-'));
+  const git = (...a) => { const r = spawnSync('git', a, { cwd: repo, encoding: 'utf8' }); if (r.status) throw new Error(r.stderr); };
+  git('init', '-q'); git('config', 'user.email', 'e2e@example.invalid'); git('config', 'user.name', 'e2e');
+  fs.mkdirSync(path.join(repo, 'docs'));
+  const doc = path.join(repo, 'docs', 'doc.md');
+  fs.writeFileSync(doc, '# v1\n'); git('add', '.'); git('commit', '-qm', 'one');
+  fs.writeFileSync(doc, '# v2\n'); git('commit', '-qam', 'two');
+
+  let app = await openApp(doc);
+  try {
+    assert.match(await app.waitFor(`const t = document.getElementById('versionInfo').textContent; return /2 commits/.test(t) ? t : null;`, 'two commits'), /git: .* · clean · 2 commits/);
+    await key(app, 'h');
+    await app.waitFor(`return document.querySelectorAll('#versionPicker option').length >= 3;`, 'versions listed');
+    // Select the older commit ("one"), keep "Backup current first" ticked, restore.
+    await app.eval(`const p = document.getElementById('versionPicker');
+      p.value = [...p.options].find(o => o.textContent.includes('one')).value; p.dispatchEvent(new Event('change'));`);
+    await app.waitFor(`return !document.getElementById('restoreSelectedBtn').disabled;`, 'diff loaded');
+    assert.equal(await app.eval(`return document.getElementById('backupFirst').checked;`), true);
+    await app.eval(`document.getElementById('restoreSelectedBtn').click();`);
+    await app.waitFor(`return document.getElementById('editor').value.startsWith('# v1');`, 'restore');
+    await app.waitFor(`return /1 snapshot/.test(document.getElementById('versionInfo').textContent);`, 'snapshot count in status bar');
+    const versions = await app.eval(`return await window.__TAURI__.core.invoke('list_versions', { path: ${JSON.stringify(doc)} });`);
+    assert.equal(versions.filter((v) => v.label === 'snapshot').length, 1, JSON.stringify(versions));
+    assert.equal(versions.filter((v) => v.author).length, 2, JSON.stringify(versions));
+  } finally { await app.close(); fs.rmSync(repo, { recursive: true, force: true }); }
+
+  // Outside git: three saves inside a second or two give three distinct snapshots.
+  const plain = fresh('crlf.md');
+  app = await openApp(plain);
+  try {
+    for (const n of [1, 2, 3]) await editAndSave(app, `\nsave ${n}`);
+    const v = await app.eval(`return await window.__TAURI__.core.invoke('list_versions', { path: ${JSON.stringify(plain)} });`);
+    assert.equal(v.length, 3, JSON.stringify(v));
+    assert.equal(new Set(v.map((x) => x.id)).size, 3);
+  } finally { await app.close(); }
+});
+
+test('absolute local image paths are inlined too', { skip }, async () => {
+  const app = await openApp(path.join(fixtures, 'abs-image.md'));
+  try {
+    assert.ok(await app.waitFor(`const i = document.querySelector('#preview img[alt=abs]'); return i && i.getAttribute('src').startsWith('data:image/png;base64,') && i.naturalWidth === 1;`, 'absolute image inlined and decoded'));
   } finally { await app.close(); }
 });
