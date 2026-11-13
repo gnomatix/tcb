@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "tcb",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "identifier": "com.gnomatix.tcb",
   "mainBinaryName": "tcb",
   "build": {
@@ -59,7 +59,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNEOUU1Njk1Mzc0QUREQTkKUldTcDNVbzNsVmFlUGFUZHhCT2NHamdXRUt0a0ZWdnFUT2NWZC9NdGFHZ0FDaHgzUUo0TWJxUDkK",
       "endpoints": [
-        "https://illumignoti.gnomatix.com/latest.json"
+        "https://illumignoti.gnomatix.com/latest.json",
+        "https://github.com/gnomatix/tcb/releases/latest/download/latest.json"
       ],
       "windows": { "installMode": "passive" }
     }

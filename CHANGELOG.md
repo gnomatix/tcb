@@ -3,6 +3,15 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## 0.2.3 — 2026-11-13
+
+### Fixed
+- The in-app updater's only endpoint, `illumignoti.gnomatix.com`, has no DNS record, so no
+  installed copy could find an update. The GitHub release manifest
+  (`releases/latest/download/latest.json`) is now a second endpoint; the updater tries
+  endpoints in order and moves on when one fails. Copies of 0.2.2 and earlier only know the
+  first endpoint, so they still need that domain to serve the manifest.
+
 ## 0.2.2 — 2026-11-13
 
 ### Fixed

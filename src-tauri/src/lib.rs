@@ -591,6 +591,28 @@ mod tests {
     }
 
     #[test]
+    fn updater_has_a_reachable_fallback_endpoint() {
+        // The first endpoint is a custom domain; if it has no DNS record or is down the
+        // updater moves on to the next one, so the GitHub release manifest must stay listed.
+        let conf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json")).unwrap(),
+        )
+        .unwrap();
+        let endpoints: Vec<&str> = conf["plugins"]["updater"]["endpoints"]
+            .as_array()
+            .expect("updater endpoints")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(endpoints.iter().all(|u| u.starts_with("https://")), "{endpoints:?}");
+        assert!(
+            endpoints.contains(&"https://github.com/gnomatix/tcb/releases/latest/download/latest.json"),
+            "{endpoints:?}"
+        );
+        assert!(conf["plugins"]["updater"]["pubkey"].as_str().map_or(false, |k| !k.is_empty()));
+    }
+
+    #[test]
     fn git_helpers_run_against_this_repo() {
         // The crate lives inside the project's own git checkout; use it as a fixture.
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));

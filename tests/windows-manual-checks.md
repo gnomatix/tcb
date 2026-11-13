@@ -90,8 +90,10 @@ v0.2.2 is the first release built with updater signatures. Its `latest.json` and
 against `plugins.updater.pubkey` in `tauri.conf.json` (minisign, key id match, file and
 trusted-comment signatures valid). v0.2.0 and v0.2.1 have no `latest.json`.
 
-- [ ] The app's updater endpoint, `https://illumignoti.gnomatix.com/latest.json`, serves (or
-      redirects to) `https://github.com/gnomatix/tcb/releases/download/v0.2.2/latest.json`.
-      It could not be reached from the cloud build sandbox, so it is unverified.
-- [ ] Install v0.2.1, start it with the endpoint serving the v0.2.2 `latest.json`, and confirm
-      the update to 0.2.2 is offered, downloads, and installs in passive mode.
+- [ ] `illumignoti.gnomatix.com` has **no DNS record** (checked 2026-11-13 via dns.google: NOERROR,
+      empty answer), so 0.2.0–0.2.2, which list only that endpoint, cannot find any update. Either
+      create the record and serve (or redirect to) the latest GitHub `latest.json` there, or accept
+      that those versions must be updated by hand. From 0.2.3 on, the GitHub manifest is a second
+      endpoint and is used when the domain fails.
+- [ ] Install v0.2.3, publish any later release, and confirm the update is offered through the
+      GitHub fallback endpoint, downloads, and installs in passive mode.
