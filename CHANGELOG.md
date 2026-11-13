@@ -3,6 +3,15 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## 0.2.1 — 2026-11-13
+
+### Fixed
+- Images referenced by a relative path (`![](images/fig.png)`, `![](./a.jpg)`) never
+  displayed, because the WebView's origin is the app rather than the document's folder.
+  Local images (relative to the document, or absolute) are now inlined as `data:` URIs at
+  render time: png, jpg, gif, webp, svg, bmp, ico and avif up to 8 MiB each. Paths that
+  escape the document's folder via `..` are refused; `http(s):` URLs are left as they are.
+
 ## 0.2.0 — 2026-11-05
 
 ### Fixed
@@ -33,11 +42,6 @@ All notable changes to TCB, M.D. Versions follow semver; the Windows installer a
   `.md`/`.markdown` links open that file in the app (with the usual unsaved-edits prompt),
   `#heading` links scroll to the heading (headings get GitHub-style ids), and anything
   else is ignored.
-- Images referenced by a relative path (`![](images/fig.png)`, `![](./a.jpg)`) never
-  displayed, because the WebView's origin is the app rather than the document's folder.
-  Local images (relative to the document, or absolute) are now inlined as `data:` URIs at
-  render time: png, jpg, gif, webp, svg, bmp, ico and avif up to 8 MiB each. Paths that
-  escape the document's folder via `..` are refused; `http(s):` URLs are left as they are.
 
 ### Added
 - `Ctrl+E` toggles edit mode (documented before, now bound), `Ctrl+Shift+S` Save As,

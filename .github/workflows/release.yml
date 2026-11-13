@@ -10,6 +10,11 @@ on:
         description: 'Release tag to create/update (e.g. v0.2.0). Required when run manually from a branch.'
         required: true
         type: string
+      draft:
+        description: 'Create the release as a draft (untick to publish it immediately).'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   publish-tauri:
@@ -91,7 +96,8 @@ jobs:
             ${{ steps.sig.outputs.signing == 'true'
                 && 'See the assets to download and install this version.'
                 || 'See the assets to download and install this version. NOTE - built without the updater signing key, so this release is not published to the in-app updater.' }}
-          releaseDraft: true            # review before publishing; flip to false to auto-publish
+          # Tag pushes always make a draft for review; a manual run publishes when draft=false.
+          releaseDraft: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
           prerelease: false
           # Unsigned fallback: merge tauri.unsigned.conf.json (createUpdaterArtifacts=false).
           args: >-
