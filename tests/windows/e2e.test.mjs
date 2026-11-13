@@ -366,8 +366,8 @@ test('a second instance with a relative path opens it in the running window', { 
     const second = spawn(APP, ['rel.md'], { cwd: path.join(fixtures, 'sub'), stdio: 'ignore' });
     const code = await new Promise((r) => second.on('exit', r));
     assert.equal(code, 0, 'second instance should hand off and exit');
-    await app.waitFor(`return document.getElementById('docTitle').textContent.includes('rel.md');`, 'forwarded file to open');
-    assert.equal(await text(app, '#preview h1'), 'Relative');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes('rel.md')
+      && document.querySelector('#preview h1')?.textContent === 'Relative';`, 'forwarded file to open and render');
   } finally { await app.close(); }
 });
 
@@ -476,16 +476,21 @@ test('absolute local image paths are inlined too', { skip }, async () => {
   } finally { await app.close(); }
 });
 
+// The window title as Windows shows it (app.js sets "<name> — TCB, M.D.", with "• " when dirty).
+const winTitle = (file, dirty) => `${dirty ? '• ' : ''}${path.basename(file)} — TCB, M.D.`;
+
 test('closing with unsaved edits asks first: No keeps the window, Yes closes it', { skip }, async () => {
-  const app = await openApp(fresh('crlf.md'));
+  const file = fresh('crlf.md');
+  const app = await openApp(file);
   try {
     await app.eval(`const e = document.getElementById('editor'); e.value += 'unsaved'; e.dispatchEvent(new Event('input'));`);
-    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    // Close the way the X button does: WM_CLOSE through UI Automation.
+    assert.equal(uia(winTitle(file, true), '__close__'), 'OK');
     assert.equal(uia('Unsaved changes', 'No'), 'OK');
     await sleep(1000);
     assert.equal(app.exited, null, 'window must stay open after No');
     assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'edits must survive');
-    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    assert.equal(uia(winTitle(file, true), '__close__'), 'OK');
     assert.equal(uia('Unsaved changes', 'Yes'), 'OK');
     for (let i = 0; i < 100 && app.exited === null; i++) await sleep(100);
     assert.notEqual(app.exited, null, 'window must close after Yes');
@@ -493,9 +498,10 @@ test('closing with unsaved edits asks first: No keeps the window, Yes closes it'
 });
 
 test('closing without edits does not ask', { skip }, async () => {
-  const app = await openApp(fresh('crlf.md'));
+  const file = fresh('crlf.md');
+  const app = await openApp(file);
   try {
-    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    assert.equal(uia(winTitle(file, false), '__close__'), 'OK');
     for (let i = 0; i < 100 && app.exited === null; i++) await sleep(100);
     assert.notEqual(app.exited, null, 'clean window should close immediately');
   } finally { await app.close(); }
