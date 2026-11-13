@@ -613,6 +613,28 @@ mod tests {
     }
 
     #[test]
+    fn e2e_config_only_adds_the_debug_port() {
+        // tauri.e2e.conf.json replaces app.windows wholesale (JSON merge patch), so it must
+        // stay identical to the shipping window config apart from additionalBrowserArgs.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |f: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join(f)).unwrap()).unwrap()
+        };
+        let main = read("tauri.conf.json");
+        let mut e2e = read("tauri.e2e.conf.json");
+        let args = e2e["app"]["windows"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("additionalBrowserArgs")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .expect("additionalBrowserArgs");
+        assert!(args.contains("--remote-debugging-port="), "{args}");
+        assert!(main["app"]["windows"][0].get("additionalBrowserArgs").is_none(),
+            "the shipping config must not open a debug port");
+        assert_eq!(e2e["app"]["windows"], main["app"]["windows"]);
+    }
+
+    #[test]
     fn git_helpers_run_against_this_repo() {
         // The crate lives inside the project's own git checkout; use it as a fixture.
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));

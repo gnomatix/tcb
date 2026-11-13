@@ -1,18 +1,23 @@
 // End-to-end checks of the real tcb.exe on Windows (WebView2).
 //
-// Runs in CI on windows-latest after the release build (see .github/workflows/ci.yml,
-// job bundle-windows). Each test launches tcb.exe with a file argument and with
-// WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>, then drives the page
-// over the Chrome DevTools Protocol (Node 22's built-in WebSocket). No WebDriver: in CI,
-// msedgedriver both mangled the file argument (passing "--d:\...\test.md") and failed to
-// discover the WebView2 debugging port ("DevToolsActivePort file doesn't exist").
+// Runs in CI on windows-latest (see .github/workflows/ci.yml, job bundle-windows) against
+// an e2e build of tcb.exe made with src-tauri/tauri.e2e.conf.json, which only adds
+// --remote-debugging-port=9222 to the window's additionalBrowserArgs. Each test launches
+// that exe with a file argument and drives the page over the Chrome DevTools Protocol
+// (Node 22's built-in WebSocket).
+//
+// Why not WebDriver or an environment variable: wry always passes its own
+// AdditionalBrowserArguments, and WebView2 then ignores WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+// (no debug port appeared on any of 9 launches in CI). msedgedriver relies on that variable,
+// so it failed with "DevToolsActivePort file doesn't exist"; it also passed the file
+// argument as a mangled "--d:\...\test.md" switch.
 //
 // It covers the items of tests/windows-manual-checks.md that need no native dialog: real
 // Tauri IPC (argv open, Rust rendering, git version info), on-disk text formats, local
 // image inlining, raw-HTML handling, flavor badges, the not-text error, and the window /
 // webview permissions behind the title and zoom features.
 //
-// Requirements: Windows, Node 22+, env TCB_EXE (path to the built tcb.exe).
+// Requirements: Windows, Node 22+, env TCB_EXE (path to the e2e build of tcb.exe).
 // Run: node --test "tests/windows/*.test.mjs"
 //
 // Not covered (they need a person or a native dialog): Save As / Open dialogs, the
@@ -33,7 +38,7 @@ const skip = process.platform !== 'win32' || !APP ? 'needs Windows and TCB_EXE' 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let fixtures;
-let nextPort = 9300;
+const PORT = Number(process.env.TCB_DEBUG_PORT || 9222);
 
 function killTree(pid) {
   spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
@@ -41,11 +46,8 @@ function killTree(pid) {
 
 /** Launch tcb.exe on `file` and return a CDP-backed handle to its WebView2 page. */
 async function openApp(file, { waitForLoad = true } = {}) {
-  const port = nextPort++;
-  const proc = spawn(APP, [file], {
-    env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}` },
-    stdio: 'ignore',
-  });
+  const port = PORT;
+  const proc = spawn(APP, [file], { stdio: 'ignore' });
   let exited = null;
   proc.on('exit', (code) => { exited = code; });
 

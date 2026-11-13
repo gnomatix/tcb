@@ -91,11 +91,22 @@ jobs:
           taskkill /PID $p.Id /T /F
           Start-Sleep -Seconds 2
 
+      # A separate build whose only difference is a WebView2 DevTools port (see
+      # src-tauri/tauri.e2e.conf.json); the shipped installer above never has one.
+      - name: build the e2e variant of tcb.exe
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          export TAURI_CONFIG="$(cat tauri.e2e.conf.json)"
+          touch build.rs src/lib.rs
+          cargo build --release --features tauri/custom-protocol
+          cp target/release/tcb.exe "$RUNNER_TEMP/tcb-e2e.exe"
+
       - name: end-to-end checks on WebView2
         timeout-minutes: 15
         shell: bash
         env:
-          TCB_EXE: ${{ github.workspace }}\src-tauri\target\release\tcb.exe
+          TCB_EXE: ${{ runner.temp }}\tcb-e2e.exe
         run: node --test "tests/windows/*.test.mjs"
 
   ui-smoke:
