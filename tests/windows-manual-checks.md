@@ -19,6 +19,7 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 | Second instance | `tcb.exe rel.md` started from another folder hands off and the running window opens that file |
 | Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; `openUrl` is permitted by `opener:default` |
 | History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
+| Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file |
 
 ## Still manual (native UI the WebView cannot drive)
 
@@ -34,7 +35,8 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 - [ ] `Ctrl+P` opens the native print dialog; `Ctrl+Shift+P` opens Print View.
 - [ ] `Ctrl`+mouse-wheel and a touchpad pinch zoom one step per gesture, with no extra
       WebView2 zoom step.
-- [ ] The NSIS installer and `.msi` install; double-clicking a `.md` file in Explorer opens it.
+- [ ] The `.msi` installs and uninstalls cleanly (the NSIS installer is checked in CI), and an
+      interactive (non-silent) NSIS install shows the expected pages.
 
 ## Auto-update (`tauri-plugin-updater`, `release.yml`)
 
