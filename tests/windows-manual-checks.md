@@ -1,99 +1,50 @@
-# Windows manual verification checklist
+# Windows verification checklist
 
-Automated coverage stops at the Tauri IPC boundary: `cargo test --lib` exercises the
-Rust logic (also on `windows-latest` via `.github/workflows/ci.yml`) and `tests/ui/`
-drives the front end in headless Chromium with a mock host. Everything below needs a
-real `tcb.exe` on Windows 11 (`mise run dev` or `mise run build`). Tick items off per
-release; each maps to a specific change so a failure points at its cause.
+Most of what used to be on this list now runs on every push in CI, against the real
+`tcb.exe` on Windows WebView2 (`windows-latest`): `tests/windows/e2e.test.mjs`, in the
+`bundle-windows` job of `.github/workflows/ci.yml`. CI builds a test variant of the app
+whose only difference is a WebView2 DevTools port (`src-tauri/tauri.e2e.conf.json`, kept
+in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 
-## Open / save round-trip (`textfile.rs`, `save_file`, `app.js` state.format)
+## Verified automatically on Windows (CI)
 
-- [ ] Open a file saved by Notepad with **CRLF** line endings; status bar reads `CRLF · UTF-8`.
-      Edit one line, `Ctrl+S`, then `git diff` / `fc /b` the file: only that line changed, no
-      line-ending churn.
-- [ ] Open a **UTF-8 with BOM** file; status bar reads `CRLF · UTF-8 BOM` (or `LF …`). Save; the
-      first three bytes are still `EF BB BF` and the preview does not show a stray `ï»¿`.
-- [ ] Open a **UTF-16 LE** file (Notepad → Save As → Encoding "UTF-16 LE"). It opens, status bar
-      shows `UTF-16 LE`; save it and reopen in Notepad — still UTF-16 LE, text intact.
-- [ ] Open a non-text file renamed to `.md` (e.g. a PNG). A dialog says it could not be opened and
-      why; the previous document stays loaded.
-- [ ] Launch `tcb.exe missing-file.md` from a shell: no crash, window shows the welcome page.
-- [ ] New document → `Ctrl+S` prompts Save As; `Ctrl+Shift+S` on an existing file prompts with
-      the current path pre-filled; cancelling either leaves the document dirty.
+| Area | What the suite checks |
+|---|---|
+| Open | `test.md` opens from argv and renders through the Rust command; a missing file shows the welcome page; a non-text file reports "not valid UTF-8" in an alert and the current document stays |
+| Text formats | CRLF, UTF-8 BOM + CRLF and UTF-16 LE are reported in the status bar; saving each keeps the BOM and CRLF on disk, with only the edit added |
+| Rendering | raw HTML stays literal text (no `<b>`, no script, no double escaping); pagebreak `<hr>`; KaTeX; GFM flavor badges (`pagebreaks` allowed; `math`, `wikilinks`, `heading-attrs`, `definitions`, `frontmatter` flagged) |
+| Images | relative and absolute local images are inlined and decode; `../` escapes and web images are left alone |
+| Window | native title `name.md — TCB, M.D.`, with a leading `•` when dirty; `Ctrl+E` and dirty tracking |
+| Zoom | `Ctrl+=` changes the WebView2 zoom; the level is stored and restored after a relaunch; `Ctrl+0` resets |
+| Second instance | `tcb.exe rel.md` started from another folder hands off and the running window opens that file |
+| Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; `openUrl` is permitted by `opener:default` |
+| History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
 
-## Shortcuts and window behaviour (`app.js`, `tauri.conf.json`, `capabilities/default.json`)
+## Still manual (native UI the WebView cannot drive)
 
-- [ ] `Ctrl+E` toggles edit/view; `Ctrl+O` opens the native file picker (filtered to `.md`,
-      `.markdown`); the 📂 toolbar button does the same.
-- [ ] Native title bar reads `name.md — TCB, M.D.` and gains a leading `•` when dirty.
-- [ ] With unsaved edits, click the window **X**: a confirmation appears; **No** keeps the window
-      open and editable; **Yes** closes it. With no edits the window closes immediately.
-      (Requires `core:window:allow-destroy`; if the X does nothing, that permission is the suspect.)
-- [ ] Drag a `.md` file from Explorer onto the window: it opens; with unsaved edits a confirmation
-      appears first.
-- [ ] With the app running, launch `tcb.exe other.md` from a **different** folder using a
-      **relative** path (`cd C:\docs && "C:\Program Files\…\tcb.exe" notes.md`): the existing
-      window is focused and `C:\docs\notes.md` opens.
-- [ ] Zoom: `Ctrl+=` / `Ctrl+-` / `Ctrl+0` and `Ctrl`+mouse-wheel change the zoom and the title
-      flashes the percentage; the WebView's own zoom must **not** also fire (no double step).
-      Quit and relaunch: the zoom level is restored.
-- [ ] `Ctrl+P` still opens the native print dialog; `Ctrl+Shift+P` still opens Print View.
-
-## Links in the preview (`app.js` classifyLink, `tauri-plugin-opener`, `opener:default`)
-
-- [ ] Open a document containing `[web](https://example.com)` and `[mail](mailto:x@example.com)`.
-      Clicking the web link opens `example.com` in the **default browser**; the app window
-      is unchanged (still shows the document, not the web page). The mail link opens the
-      default mail client. Middle-click and `Ctrl`+click on the web link do nothing.
-      (If nothing opens, suspect `opener:default` in `capabilities/default.json`.)
-- [ ] In `C:\docs\a.md` add `[b](sub/b.md#details)` where `C:\docs\sub\b.md` has a
-      `## Details` heading far down. Click it: `b.md` opens in the app (title bar updates)
-      and the view is scrolled to **Details**. With unsaved edits in `a.md` the
-      unsaved-changes confirmation appears first; **No** keeps `a.md`.
-- [ ] Click `[missing](nope.md)`: a "Could not open file" dialog appears and the current
-      document stays loaded. Click `[img](pic.png)` and `[f](file:///C:/x.md)`: nothing happens.
-- [ ] Click a `[toc](#some-heading)` link in a long document: the preview scrolls to that
-      heading; the address does not change and the document stays loaded.
-
-## History (`lib.rs` git helpers, snapshots)
-
-- [ ] Open a file **in a subdirectory** of a git repo (e.g. `docs\guide.md`): status bar shows
-      `git: <branch> · clean · N commits` with N > 0, and `Ctrl+H` lists those commits.
-      (Pre-fix behaviour was `0 commits` / empty list for anything below the repo root.)
-- [ ] In that git file, select a past version, tick **Backup current first**, Restore. Reopen
-      `Ctrl+H`: a `snapshot` entry now appears in the list alongside the commits and the status
-      bar shows `… · 1 snapshot`. Selecting it shows a diff; restoring it works.
-- [ ] Open a file **outside** any git repo, save three times quickly (`Ctrl+S` ×3 within one
-      second with an edit between): `Ctrl+H` lists three distinct snapshots, none overwritten.
-- [ ] Snapshot directory (`%APPDATA%\com.gnomatix.tcb\snapshots\<hash>\`) never exceeds
-      200 files for one document after many saves (oldest are pruned).
-
-## Rendering (`markdown.rs`)
-
-- [ ] Open `test.md` from the repo root: the "Raw HTML" section shows the literal text
-      `<b>not bold</b>` (not `&lt;b&gt;`), nothing is bold, and no script runs.
-- [ ] Feature badges for `test.md` with flavor **GitHub (GFM)**: `pagebreaks` is **not** flagged
-      red; `math`, `wikilinks`, `heading-attrs`, `definitions`, `frontmatter` are.
-
-## Packaging (unchanged by this branch, but re-verify after capability changes)
-
-- [ ] `mise run build` succeeds; the NSIS installer and `.msi` are produced; double-clicking a
-      `.md` file in Explorer opens it in TCB, M.D.
-- [ ] Open a document that references `![](images/fig.png)` (relative to the document) and an
-      absolute `C:\…\pic.png`: both images display. `![](../../outside.png)` and an `https://`
-      image are left alone (the latter loads only if the CSP allows the host).
+- [ ] `Ctrl+O` and the 📂 button open the native file picker (filtered to `.md`, `.markdown`).
+- [ ] New document → `Ctrl+S` prompts Save As; `Ctrl+Shift+S` prompts with the current path
+      pre-filled; cancelling either leaves the document dirty.
+- [ ] With unsaved edits, the window **X** asks for confirmation; **No** keeps the window open,
+      **Yes** closes it. Without edits it closes immediately.
+- [ ] Dragging a `.md` file from Explorer onto the window opens it (with the unsaved-edits
+      prompt first when dirty).
+- [ ] Clicking a web link in the preview opens the default browser, and a `mailto:` link the
+      default mail client; middle-click and `Ctrl`+click do nothing.
+- [ ] `Ctrl+P` opens the native print dialog; `Ctrl+Shift+P` opens Print View.
+- [ ] `Ctrl`+mouse-wheel and a touchpad pinch zoom one step per gesture, with no extra
+      WebView2 zoom step.
+- [ ] The NSIS installer and `.msi` install; double-clicking a `.md` file in Explorer opens it.
 
 ## Auto-update (`tauri-plugin-updater`, `release.yml`)
 
-v0.2.2 is the first release built with updater signatures. Its `latest.json` and the
-`.sig` files are on the GitHub release, and the NSIS installer's signature was verified
-against `plugins.updater.pubkey` in `tauri.conf.json` (minisign, key id match, file and
-trusted-comment signatures valid). v0.2.0 and v0.2.1 have no `latest.json`.
+v0.2.2 is the first release built with updater signatures; v0.2.3 adds the GitHub release
+manifest as a second endpoint. Both releases' installer signatures were verified against
+`plugins.updater.pubkey` in `tauri.conf.json`.
 
-- [ ] `illumignoti.gnomatix.com` has **no DNS record** (checked 2026-11-13 via dns.google: NOERROR,
-      empty answer), so 0.2.0–0.2.2, which list only that endpoint, cannot find any update. Either
-      create the record and serve (or redirect to) the latest GitHub `latest.json` there, or accept
-      that those versions must be updated by hand. From 0.2.3 on, the GitHub manifest is a second
-      endpoint and is used when the domain fails.
+- [ ] `illumignoti.gnomatix.com` has **no DNS record** (checked 2026-11-13 via dns.google:
+      NOERROR, empty answer), so 0.2.0–0.2.2, which list only that endpoint, cannot find any
+      update. Create the record and serve (or redirect to) the latest GitHub `latest.json`
+      there, or update those installs by hand.
 - [ ] Install v0.2.3, publish any later release, and confirm the update is offered through the
       GitHub fallback endpoint, downloads, and installs in passive mode.

@@ -69,12 +69,17 @@ mise run dev                   # = cargo tauri dev   (debug, live reload)
 # Tests
 (cd src-tauri && cargo test --lib)        # Rust unit tests: markdown.rs, textfile.rs, lib.rs git/snapshot helpers
 node --test "tests/ui/*.test.js"          # Front-end smoke tests (headless Chromium, mock host) — needs playwright
+node --test "tests/windows/*.test.mjs"    # Windows only: real tcb.exe on WebView2 over CDP (CI job bundle-windows)
 ```
 
 On Linux CI/agent hosts the Rust tests need `libwebkit2gtk-4.1-dev` + `libgtk-3-dev` to
-link the Tauri crate; the logic under test itself is platform-neutral. Anything touching
-Tauri IPC, native dialogs, WebView2, file associations or the installer can only be
-verified on Windows — say so explicitly in handoffs rather than implying it was run.
+link the Tauri crate; the logic under test itself is platform-neutral. Tauri IPC and WebView2
+behaviour is covered on Windows by the CI e2e suite, which drives an e2e build of tcb.exe
+(`TAURI_CONFIG` from `src-tauri/tauri.e2e.conf.json`, adding only a DevTools port). WebDriver
+does not work for this app: wry always sets WebView2's browser arguments, so the
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` variable msedgedriver relies on is ignored. Native
+dialogs, file associations, the installer and auto-update still need a person on Windows; say
+so explicitly in handoffs rather than implying it was run.
 
 ## Architecture Overview
 

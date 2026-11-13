@@ -145,5 +145,10 @@ cd ..;        npm run test:ui           # Front end: headless Chromium smoke tes
 ```
 
 The UI suite needs Node 22+ and Playwright (`npm i -D playwright && npx playwright install chromium`
-once). See `tests/ui/README.md` for what it does and does not cover; anything that
-touches Tauri IPC, native dialogs or WebView2 still needs a manual run on Windows.
+once). See `tests/ui/README.md` for what it does and does not cover.
+
+On every push, CI also runs `tests/windows/e2e.test.mjs` against the real `tcb.exe` on Windows
+WebView2: opening, rendering, text-format round-trips, images, links, zoom, history and the
+second-instance hand-off. It uses a test build with a WebView2 DevTools port
+(`src-tauri/tauri.e2e.conf.json`); the shipped installer has none. Native dialogs, Explorer
+drag-and-drop, the installer and auto-update remain manual: see `tests/windows-manual-checks.md`.
