@@ -79,3 +79,19 @@ release; each maps to a specific change so a failure points at its cause.
 
 - [ ] `mise run build` succeeds; the NSIS installer and `.msi` are produced; double-clicking a
       `.md` file in Explorer opens it in TCB, M.D.
+- [ ] Open a document that references `![](images/fig.png)` (relative to the document) and an
+      absolute `C:\…\pic.png`: both images display. `![](../../outside.png)` and an `https://`
+      image are left alone (the latter loads only if the CSP allows the host).
+
+## Auto-update (`tauri-plugin-updater`, `release.yml`)
+
+v0.2.2 is the first release built with updater signatures. Its `latest.json` and the
+`.sig` files are on the GitHub release, and the NSIS installer's signature was verified
+against `plugins.updater.pubkey` in `tauri.conf.json` (minisign, key id match, file and
+trusted-comment signatures valid). v0.2.0 and v0.2.1 have no `latest.json`.
+
+- [ ] The app's updater endpoint, `https://illumignoti.gnomatix.com/latest.json`, serves (or
+      redirects to) `https://github.com/gnomatix/tcb/releases/download/v0.2.2/latest.json`.
+      It could not be reached from the cloud build sandbox, so it is unverified.
+- [ ] Install v0.2.1, start it with the endpoint serving the v0.2.2 `latest.json`, and confirm
+      the update to 0.2.2 is offered, downloads, and installs in passive mode.
