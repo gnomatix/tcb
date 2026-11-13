@@ -100,9 +100,13 @@ jobs:
           releaseDraft: ${{ github.event_name != 'workflow_dispatch' || inputs.draft }}
           prerelease: false
           # Unsigned fallback: merge tauri.unsigned.conf.json (createUpdaterArtifacts=false).
+          # Written as "not signing && overlay || matrix.args" on purpose: matrix.args is ''
+          # on Windows, and '' is falsy, so "signing && matrix.args || overlay" always fell
+          # through to the unsigned overlay. That is why v0.2.0 and v0.2.1 shipped without
+          # .sig files or latest.json even though the signing secret was set.
           args: >-
-            ${{ steps.sig.outputs.signing == 'true'
-                && matrix.args
-                || format('{0} --config src-tauri/tauri.unsigned.conf.json', matrix.args) }}
+            ${{ steps.sig.outputs.signing != 'true'
+                && format('{0} --config src-tauri/tauri.unsigned.conf.json', matrix.args)
+                || matrix.args }}
           includeUpdaterJson: ${{ steps.sig.outputs.signing == 'true' }}
           updaterJsonPreferNsis: true
