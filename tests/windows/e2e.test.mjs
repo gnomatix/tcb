@@ -152,7 +152,9 @@ function uia(title, button, filePath) {
     '-Title', title, '-Button', button];
   if (filePath) args.push('-Path', filePath);
   const r = spawnSync('powershell.exe', args, { encoding: 'utf8', timeout: 60_000 });
-  return (r.stdout || '').trim() + (r.status ? ` (exit ${r.status}) ${(r.stderr || '').trim()}` : '');
+  const out = (r.stdout || '').trim();
+  // OK on success; otherwise the whole output (status word plus the dialog's controls).
+  return r.status === 0 && out.split(/\r?\n/)[0] === 'OK' ? 'OK' : `${out} (exit ${r.status}) ${(r.stderr || '').trim()}`;
 }
 /** Copy a fixture to a fresh file so tests that save never share a path. */
 let copyN = 0;
