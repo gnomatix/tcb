@@ -1,7 +1,9 @@
 # Operate a native window of tcb.exe through Windows UI Automation (used by e2e.test.mjs).
 #   -Title   window title to wait for (top-level window, e.g. "Unsaved changes", "Open")
-#   -Button  button to press (e.g. "Yes", "No", "Open", "Save"), or __close__ to close the
-#            window itself the way its X button does (WindowPattern.Close -> WM_CLOSE)
+#   -Button  button to press (e.g. "Yes", "No"), __close__ to close the window the way its
+#            X button does (WindowPattern.Close -> WM_CLOSE), or __exists__ to only confirm
+#            that the window appeared. On GitHub's Windows runners native dialogs cannot take
+#            focus or keyboard input, so the tests use __close__ and __exists__ only.
 #   -Path    optional text for the dialog's file-name box (file dialogs)
 # Prints OK / NOWINDOW / NOBUTTON / NOEDIT and exits 0 / 2 / 3 / 4.
 param([Parameter(Mandatory)][string]$Title, [Parameter(Mandatory)][string]$Button, [string]$Path, [int]$Timeout = 20)
@@ -24,6 +26,8 @@ while (-not $win -and (Get-Date) -lt $deadline) {
   if (-not $win) { Start-Sleep -Milliseconds 300 }
 }
 if (-not $win) { Write-Output "NOWINDOW"; exit 2 }
+
+if ($Button -eq '__exists__') { Write-Output "OK"; exit 0 }
 
 if ($Button -eq '__close__') {
   $win.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
