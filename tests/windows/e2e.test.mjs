@@ -20,9 +20,10 @@
 // Requirements: Windows, Node 22+, env TCB_EXE (path to the e2e build of tcb.exe).
 // Run: node --test "tests/windows/*.test.mjs"
 //
-// Not covered (they need a person or a native dialog): Save As / Open dialogs, the
-// close-with-unsaved-edits prompt, drag-and-drop from Explorer, opening a link in the
-// default browser, file associations, the installer, and auto-update.
+// Native dialogs (the unsaved-changes prompt, Open, Save As) are operated through Windows UI
+// Automation by tests/windows/uia.ps1. Not covered: drag-and-drop from Explorer, the default
+// browser / mail client actually opening, the print dialog, wheel / pinch zoom and
+// auto-update (see tests/windows-manual-checks.md); the installer is checked by its own CI step.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -145,6 +146,14 @@ async function openApp(file, { waitForLoad = true } = {}) {
 const text = (app, sel) => app.eval(`return document.querySelector(${JSON.stringify(sel)})?.textContent ?? null;`);
 const key = (app, k, mods = {}) => app.eval(
   `document.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, ctrlKey: true, shiftKey: ${!!mods.shift}, bubbles: true }));`);
+/** Press a button in a native tcb.exe dialog via UI Automation; resolves to the script output. */
+function uia(title, button, filePath) {
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(REPO, 'tests', 'windows', 'uia.ps1'),
+    '-Title', title, '-Button', button];
+  if (filePath) args.push('-Path', filePath);
+  const r = spawnSync('powershell.exe', args, { encoding: 'utf8', timeout: 60_000 });
+  return (r.stdout || '').trim() + (r.status ? ` (exit ${r.status}) ${(r.stderr || '').trim()}` : '');
+}
 /** Copy a fixture to a fresh file so tests that save never share a path. */
 let copyN = 0;
 function fresh(name) {
@@ -464,5 +473,57 @@ test('absolute local image paths are inlined too', { skip }, async () => {
   const app = await openApp(path.join(fixtures, 'abs-image.md'));
   try {
     assert.ok(await app.waitFor(`const i = document.querySelector('#preview img[alt=abs]'); return i && i.getAttribute('src').startsWith('data:image/png;base64,') && i.naturalWidth === 1;`, 'absolute image inlined and decoded'));
+  } finally { await app.close(); }
+});
+
+test('closing with unsaved edits asks first: No keeps the window, Yes closes it', { skip }, async () => {
+  const app = await openApp(fresh('crlf.md'));
+  try {
+    await app.eval(`const e = document.getElementById('editor'); e.value += 'unsaved'; e.dispatchEvent(new Event('input'));`);
+    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    assert.equal(uia('Unsaved changes', 'No'), 'OK');
+    await sleep(1000);
+    assert.equal(app.exited, null, 'window must stay open after No');
+    assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'edits must survive');
+    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    assert.equal(uia('Unsaved changes', 'Yes'), 'OK');
+    for (let i = 0; i < 100 && app.exited === null; i++) await sleep(100);
+    assert.notEqual(app.exited, null, 'window must close after Yes');
+  } finally { await app.close(); }
+});
+
+test('closing without edits does not ask', { skip }, async () => {
+  const app = await openApp(fresh('crlf.md'));
+  try {
+    await app.eval(`window.__TAURI__.window.getCurrentWindow().close(); return true;`);
+    for (let i = 0; i < 100 && app.exited === null; i++) await sleep(100);
+    assert.notEqual(app.exited, null, 'clean window should close immediately');
+  } finally { await app.close(); }
+});
+
+test('Ctrl+O opens a file through the native Open dialog', { skip }, async () => {
+  const target = fresh('crlf-bom.md');
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    await key(app, 'o');
+    assert.equal(uia('Open', 'Open', target), 'OK');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(target))});`, 'picked file to open');
+    assert.equal(await text(app, '#fileFormat'), 'CRLF · UTF-8 BOM');
+  } finally { await app.close(); }
+});
+
+test('Ctrl+Shift+S saves to a new path through the native Save As dialog', { skip }, async () => {
+  const src = fresh('crlf.md');
+  const dst = path.join(fixtures, `saved-as-${Date.now()}.md`);
+  const app = await openApp(src);
+  try {
+    await app.eval(`const e = document.getElementById('editor'); e.value += '\\nsaved as'; e.dispatchEvent(new Event('input'));`);
+    await key(app, 's', { shift: true });
+    assert.equal(uia('Save As', 'Save', dst), 'OK');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(dst))});`, 'title to switch to the new path');
+    await app.waitFor(`return document.getElementById('dirtyDot').hidden;`, 'clean after save');
+    const bytes = fs.readFileSync(dst, 'utf8');
+    assert.ok(bytes.endsWith('\r\nsaved as'), JSON.stringify(bytes.slice(-20)));
+    assert.ok(!/[^\r]\n/.test(bytes), 'CRLF kept in the new file');
   } finally { await app.close(); }
 });
