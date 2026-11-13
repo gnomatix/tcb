@@ -364,12 +364,16 @@ test('zoom set with Ctrl+= survives a relaunch', { skip }, async () => {
     await key(app, '0');
     await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1';`, 'zoom reset to 100%');
     await sleep(300);
-    const dpr100 = await app.eval(`return window.devicePixelRatio;`);
+    const at100 = await app.eval(`return { dpr: window.devicePixelRatio, w: window.innerWidth };`);
     await key(app, '=');
     await key(app, '=');
     assert.equal(await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1.25' ? '1.25' : null;`, 'zoom stored'), '1.25');
-    // The WebView2 zoom itself changed (device pixel ratio scales with page zoom).
-    await app.waitFor(`return Math.abs(window.devicePixelRatio / ${dpr100} - 1.25) < 0.02;`, 'webview zoom applied');
+    // The WebView2 zoom itself changed: page zoom shrinks the CSS viewport (and may scale
+    // devicePixelRatio). Accept either signal; the failure message reports both.
+    await app.waitFor(`const w = window.innerWidth, d = window.devicePixelRatio;
+      const ok = Math.abs(${at100.w} / w - 1.25) < 0.03 || Math.abs(d / ${at100.dpr} - 1.25) < 0.03;
+      if (ok) return true; window.__zoomDiag = { at100: ${JSON.stringify(at100)}, now: { dpr: d, w } }; return false;`, 'webview zoom applied')
+      .catch(async (err) => { throw new Error(err.message + ' ' + JSON.stringify(await app.eval('return window.__zoomDiag;'))); });
   } finally { await app.quit(); }
   app = await openApp(path.join(REPO, 'test.md'));
   try {
