@@ -6,9 +6,11 @@
 // local image inlining, raw-HTML handling, flavor badges, and the window/webview
 // permissions behind the title and zoom features.
 //
-// Requirements (CI installs them): tauri-driver on PATH, msedgedriver.exe matching the
-// WebView2 runtime, and env TCB_EXE (path to the built tcb.exe), MSEDGEDRIVER (path to
-// msedgedriver.exe). Run: node --test tests/windows/
+// Requirements (CI installs them): msedgedriver.exe matching the WebView2 runtime, and env
+// TCB_EXE (path to the built tcb.exe), MSEDGEDRIVER (path to msedgedriver.exe). The suite
+// talks to msedgedriver directly with the same capabilities tauri-driver 2.1 would send
+// (browserName webview2 + ms:edgeOptions.binary/args), so msedgedriver's own verbose log is
+// available (MSEDGEDRIVER_LOG). Run: node --test "tests/windows/*.test.mjs"
 //
 // Not covered here (they need a person or a native dialog): Save As / Open dialogs, the
 // close-with-unsaved-edits prompt, drag-and-drop from Explorer, opening a link in the
@@ -31,6 +33,30 @@ const skip = process.platform !== 'win32' || !APP || !NATIVE
 
 let driver;
 let fixtures;
+let sessionBroken = null;   // first session-creation error; later tests fail fast with it
+const LOG = process.env.MSEDGEDRIVER_LOG || path.join(os.tmpdir(), 'msedgedriver.log');
+
+function caps(file) {
+  return { capabilities: { alwaysMatch: {
+    browserName: 'webview2',
+    'ms:edgeChromium': true,
+    'ms:edgeOptions': { binary: APP, args: [file] },
+  } } };
+}
+
+async function newSession(file) {
+  if (sessionBroken) throw new Error('skipped: earlier session creation failed: ' + sessionBroken);
+  try {
+    return (await wd('POST', '/session', caps(file))).sessionId;
+  } catch (err) {
+    sessionBroken = err.message.slice(0, 200);
+    try {
+      const tail = fs.readFileSync(LOG, 'utf8').split('\n').slice(-80).join('\n');
+      console.log('---- msedgedriver log (tail) ----\n' + tail);
+    } catch {}
+    throw err;
+  }
+}
 
 async function wd(method, url, body) {
   const res = await fetch(WD + url, {
@@ -57,9 +83,7 @@ async function waitForDriver(ms = 30_000) {
 
 /** Launch tcb.exe with `file` as its argv[1] and return a session helper. */
 async function openApp(file) {
-  const { sessionId } = await wd('POST', '/session', {
-    capabilities: { alwaysMatch: { 'tauri:options': { application: APP, args: [file] } } },
-  });
+  const sessionId = await newSession(file);
   const s = {
     id: sessionId,
     exec: (script, args = []) => wd('POST', `/session/${sessionId}/execute/sync`, { script, args }),
@@ -89,7 +113,7 @@ const text = (s, sel) => s.exec(`return document.querySelector(${JSON.stringify(
 
 before(async () => {
   if (skip) return;
-  driver = spawn('tauri-driver', ['--native-driver', NATIVE], { stdio: 'inherit' });
+  driver = spawn(NATIVE, ['--port=4444', '--verbose', '--log-path=' + LOG], { stdio: 'ignore' });
   await waitForDriver();
 
   fixtures = fs.mkdtempSync(path.join(os.tmpdir(), 'tcb-e2e-'));
@@ -189,9 +213,7 @@ test('local images are inlined; escaping and web images are left alone', { skip 
 
 test('a non-text file reports why it could not be opened', { skip }, async () => {
   // The app shows an alert after the window appears; WebDriver exposes it as a user prompt.
-  const { sessionId } = await wd('POST', '/session', {
-    capabilities: { alwaysMatch: { 'tauri:options': { application: APP, args: [path.join(fixtures, 'binary.md')] } } },
-  });
+  const sessionId = await newSession(path.join(fixtures, 'binary.md'));
   try {
     const end = Date.now() + 20_000;
     let msg = null;
