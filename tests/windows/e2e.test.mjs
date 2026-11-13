@@ -229,17 +229,22 @@ test('local images are inlined; escaping and web images are left alone', { skip 
 });
 
 test('a non-text file reports why it could not be opened', { skip }, async () => {
-  const app = await openApp(path.join(fixtures, 'binary.md'), { waitForLoad: false });
+  // Start from a normal document, then open the binary file through the same path a second
+  // instance or a drop uses: the 'open-file' event -> open_path IPC -> error alert. The alert
+  // is captured in-page, because a real alert() would block the page under test.
+  const app = await openApp(path.join(REPO, 'test.md'));
+  const bin = path.join(fixtures, 'binary.md');
   try {
-    // The alert is raised after the window is shown; it may already be open when we attach,
-    // so record alerts from the start and also check for one that is already showing.
-    let message = null;
-    app.on((m) => { if (m.method === 'Page.javascriptDialogOpening') message = m.params.message; });
-    await app.send('Page.enable');
-    const end = Date.now() + 20_000;
-    while (!message && Date.now() < end) await sleep(250);
-    assert.ok(message && /not valid UTF-8/.test(message), `alert text: ${JSON.stringify(message)}`);
-    await app.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+    const direct = await app.eval(`try { await window.__TAURI__.core.invoke('open_path', { path: ${JSON.stringify(bin)} }); return 'opened'; }
+      catch (e) { return String(e && e.message || e); }`);
+    assert.match(direct, /not valid UTF-8/, direct);
+
+    await app.eval(`window.__alerts = []; window.alert = (m) => window.__alerts.push(String(m));
+      await window.__TAURI__.event.emit('open-file', ${JSON.stringify(bin)});`);
+    const shown = await app.waitFor(`return window.__alerts.length ? window.__alerts[0] : null;`, 'error alert');
+    assert.match(shown, /Could not open file[\s\S]*not valid UTF-8/, shown);
+    // The previous document is still loaded.
+    assert.match(await text(app, '#docTitle'), /test\.md/);
   } finally { await app.close(); }
 });
 
