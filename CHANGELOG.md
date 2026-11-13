@@ -3,7 +3,7 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
-## Unreleased
+## 0.2.4 — 2026-11-13
 
 ### Fixed
 - Pressing `Ctrl+=` / `Ctrl+-` quickly could leave the window at an earlier zoom level than
