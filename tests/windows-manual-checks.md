@@ -49,9 +49,10 @@ v0.2.2 is the first release built with updater signatures; v0.2.3 adds the GitHu
 manifest as a second endpoint. Both releases' installer signatures were verified against
 `plugins.updater.pubkey` in `tauri.conf.json`.
 
-- [ ] `illumignoti.gnomatix.com` has **no DNS record** (checked 2026-11-13 via dns.google:
-      NOERROR, empty answer), so 0.2.0–0.2.2, which list only that endpoint, cannot find any
-      update. Create the record and serve (or redirect to) the latest GitHub `latest.json`
-      there, or update those installs by hand.
+- [ ] `illumignoti.gnomatix.com` has a TXT record (`peer-auth=…`) but no A, AAAA, CNAME or
+      HTTPS record (checked 2026-11-13 via dns.google), so the updater's HTTPS request to
+      `https://illumignoti.gnomatix.com/latest.json` cannot connect. 0.2.0–0.2.2 list only that
+      endpoint and cannot find any update until the host serves (or redirects to) the latest
+      GitHub `latest.json`; otherwise update those installs by hand.
 - [ ] Install v0.2.3, publish any later release, and confirm the update is offered through the
       GitHub fallback endpoint, downloads, and installs in passive mode.

@@ -592,7 +592,7 @@ mod tests {
 
     #[test]
     fn updater_has_a_reachable_fallback_endpoint() {
-        // The first endpoint is a custom domain; if it has no DNS record or is down the
+        // The first endpoint is a custom domain; if it does not resolve to an address or is down the
         // updater moves on to the next one, so the GitHub release manifest must stay listed.
         let conf: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json")).unwrap(),
