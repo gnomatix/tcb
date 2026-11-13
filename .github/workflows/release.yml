@@ -40,7 +40,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Linux build deps (only when the ubuntu rows are enabled).
       - name: install dependencies (ubuntu only)

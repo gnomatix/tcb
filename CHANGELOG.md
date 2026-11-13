@@ -3,6 +3,18 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## 0.2.2 — 2026-11-13
+
+### Fixed
+- Release builds now produce updater signatures (`.sig`) and `latest.json`. In 0.2.0
+  and 0.2.1 the release workflow always applied the unsigned build settings, even with
+  the signing secret configured, so neither release can be picked up by the in-app
+  updater.
+
+### Changed
+- CI and release workflows use `actions/checkout@v5` and `actions/setup-node@v5`
+  (Node 24); the v4 actions ran under a Node 20 deprecation warning.
+
 ## 0.2.1 — 2026-11-13
 
 ### Fixed
