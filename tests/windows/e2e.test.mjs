@@ -129,8 +129,12 @@ async function openApp(file, { waitForLoad = true } = {}) {
     const name = path.basename(file);
     try {
       await app.waitFor(
+        // The title updates before the file's render lands, and the welcome page is already
+        // rendered, so also wait until the welcome text has been replaced.
         `const t = document.getElementById('docTitle')?.textContent || '';
-         return t.includes(${JSON.stringify(name)}) && document.getElementById('preview').children.length > 0;`,
+         const pv = document.getElementById('preview');
+         return t.includes(${JSON.stringify(name)}) && pv.children.length > 0
+           && !pv.textContent.includes('from File Explorer');`,
         `launch file ${name} to load`,
       );
     } catch (err) { await app.close(); throw err; }
