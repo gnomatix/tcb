@@ -76,6 +76,30 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
 
+      # Drive the freshly built tcb.exe over WebDriver on real WebView2.
+      # See tests/windows/e2e.test.mjs for what is and is not covered.
+      - name: install tauri-driver and a WebView2-matched msedgedriver
+        shell: bash
+        run: |
+          cargo install tauri-driver --locked
+          mkdir -p "$RUNNER_TEMP/edgedriver"
+          cd "$RUNNER_TEMP/edgedriver"
+          if cargo install --git https://github.com/chippers/msedgedriver-tool && msedgedriver-tool; then
+            echo "msedgedriver from msedgedriver-tool (matches the installed WebView2)"
+          fi
+          if [ ! -f msedgedriver.exe ] && [ -n "$EDGEWEBDRIVER" ]; then
+            cp "$EDGEWEBDRIVER/msedgedriver.exe" . && echo "msedgedriver from the runner image"
+          fi
+          ls -la
+          ./msedgedriver.exe --version
+
+      - name: end-to-end checks on WebView2
+        shell: bash
+        env:
+          TCB_EXE: ${{ github.workspace }}\src-tauri\target\release\tcb.exe
+          MSEDGEDRIVER: ${{ runner.temp }}\edgedriver\msedgedriver.exe
+        run: node --test "tests/windows/*.test.mjs"
+
   ui-smoke:
     name: WebAssets smoke tests (headless Chromium)
     # Pinned: ubuntu-latest moved to 26.04, which Playwright's browser installer
