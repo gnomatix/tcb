@@ -82,9 +82,16 @@ async function openApp(file, { waitForLoad = true } = {}) {
       for (const l of listeners) l(msg);
     }
   };
-  const send = (method, params = {}) => new Promise((resolve, reject) => {
+  const send = (method, params = {}, timeoutMs = 30_000) => new Promise((resolve, reject) => {
     const mid = ++id;
-    pending.set(mid, { resolve, reject });
+    const timer = setTimeout(() => {
+      pending.delete(mid);
+      reject(new Error(`CDP ${method} timed out after ${timeoutMs} ms (page blocked by a modal?)`));
+    }, timeoutMs);
+    pending.set(mid, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
     ws.send(JSON.stringify({ id: mid, method, params }));
   });
 
@@ -601,7 +608,8 @@ test('a web link opens in the default browser with that URL', { skip }, async ()
 test('Ctrl+P opens the print dialog', { skip }, async () => {
   const app = await openApp(path.join(REPO, 'test.md'));
   try {
-    await key(app, 'p');
+    // window.print() blocks the page while the print UI is up, so fire it after this call returns.
+    await app.eval(`setTimeout(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true })), 50); return true;`);
     assert.equal(uia('Print', '__exists__'), 'OK');
   } finally { await app.close(); }
 });
