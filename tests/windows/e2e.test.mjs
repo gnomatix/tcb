@@ -156,6 +156,22 @@ function uia(title, button, filePath) {
   // OK on success; otherwise the whole output (status word plus the dialog's controls).
   return r.status === 0 && out.split(/\r?\n/)[0] === 'OK' ? 'OK' : `${out} (exit ${r.status}) ${(r.stderr || '').trim()}`;
 }
+/** Answer a native dialog with Win32 messages (no focus needed); see tests/windows/win32.ps1. */
+function win32(title, { choice, filePath } = {}) {
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(REPO, 'tests', 'windows', 'win32.ps1'), '-Title', title];
+  if (choice) args.push('-Choice', choice);
+  if (filePath) args.push('-Path', filePath);
+  const r = spawnSync('powershell.exe', args, { encoding: 'utf8', timeout: 60_000 });
+  const out = (r.stdout || '').trim();
+  return r.status === 0 && out === 'OK' ? 'OK' : `${out} (exit ${r.status}) ${(r.stderr || '').trim()}`;
+}
+/** Command lines of running processes whose command line contains `needle`. */
+function processesWith(needle) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+    `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${needle}*' -and $_.Name -ne 'powershell.exe' } | ForEach-Object { "$($_.ProcessId)|$($_.Name)|$($_.CommandLine)" }`],
+    { encoding: 'utf8', timeout: 60_000 });
+  return (r.stdout || '').split(/\r?\n/).filter(Boolean);
+}
 /** Copy a fixture to a fresh file so tests that save never share a path. */
 let copyN = 0;
 function fresh(name) {
@@ -481,7 +497,7 @@ test('absolute local image paths are inlined too', { skip }, async () => {
 // The window title as Windows shows it (app.js sets "<name> — TCB, M.D.", with "• " when dirty).
 const winTitle = (file, dirty) => `${dirty ? '• ' : ''}${path.basename(file)} — TCB, M.D.`;
 
-test('closing with unsaved edits raises the confirmation and keeps the window', { skip }, async () => {
+test('closing with unsaved edits asks first: No keeps the window and edits, Yes closes it', { skip }, async () => {
   // Pressing Yes / No cannot be automated on the CI desktop (dialogs there cannot take focus
   // or input); that part stays on tests/windows-manual-checks.md.
   const file = fresh('crlf.md');
@@ -493,6 +509,16 @@ test('closing with unsaved edits raises the confirmation and keeps the window', 
     assert.equal(uia('Unsaved changes', '__exists__'), 'OK');
     await sleep(1500);
     assert.equal(app.exited, null, 'window must stay open while the prompt is shown');
+    // No: the window and the edits stay.
+    assert.equal(win32('Unsaved changes', { choice: 'No' }), 'OK');
+    await sleep(1000);
+    assert.equal(app.exited, null, 'window must stay open after No');
+    assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden && document.getElementById('editor').value.endsWith('unsaved');`), true, 'edits must survive No');
+    // Yes: the window closes.
+    assert.equal(uia(winTitle(file, true), '__close__'), 'OK');
+    assert.equal(win32('Unsaved changes', { choice: 'Yes' }), 'OK');
+    for (let i = 0; i < 100 && app.exited === null; i++) await sleep(100);
+    assert.notEqual(app.exited, null, 'window must close after Yes');
   } finally { await app.close(); }
 });
 
@@ -506,17 +532,76 @@ test('closing without edits does not ask', { skip }, async () => {
   } finally { await app.close(); }
 });
 
-test('Ctrl+O and Ctrl+Shift+S raise the native Open and Save As dialogs', { skip }, async () => {
-  // Proves the dialog permissions (dialog:default / allow-save) and the shortcut wiring.
-  // Choosing a file in them cannot be automated on the CI desktop; that stays manual.
+test('Ctrl+O opens a file and Ctrl+Shift+S saves to a new path through the native dialogs', { skip }, async () => {
+  // The file name is entered with WM_SETTEXT and confirmed with IDOK (tests/windows/win32.ps1).
+  const target = fresh('crlf-bom.md');
   let app = await openApp(path.join(REPO, 'test.md'));
   try {
     await key(app, 'o');
     assert.equal(uia('Open', '__exists__'), 'OK');
+    assert.equal(win32('Open', { filePath: target }), 'OK');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(target))})
+      && document.querySelector('#preview h1')?.textContent === 'CRLF BOM doc';`, 'picked file to open');
+    assert.equal(await text(app, '#fileFormat'), 'CRLF · UTF-8 BOM');
   } finally { await app.close(); }
-  app = await openApp(fresh('crlf.md'));
+
+  const src = fresh('crlf.md');
+  const dst = path.join(fixtures, `saved-as-${Date.now()}.md`);
+  app = await openApp(src);
   try {
+    await app.eval(`const e = document.getElementById('editor'); e.value += '\\nsaved as'; e.dispatchEvent(new Event('input'));`);
     await key(app, 's', { shift: true });
     assert.equal(uia('Save As', '__exists__'), 'OK');
+    assert.equal(win32('Save As', { filePath: dst }), 'OK');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(dst))})
+      && document.getElementById('dirtyDot').hidden;`, 'save to the new path');
+    const bytes = fs.readFileSync(dst, 'utf8');
+    assert.ok(bytes.endsWith('\r\nsaved as'), JSON.stringify(bytes.slice(-20)));
+    assert.ok(!/[^\r]\n/.test(bytes), 'CRLF kept in the new file');
+  } finally { await app.close(); }
+});
+
+test('Ctrl+wheel zooms one step per 50 units of wheel delta, with no extra WebView2 zoom', { skip }, async () => {
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    await key(app, '0');
+    await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1';`, 'zoom reset');
+    await sleep(300);
+    const w100 = await app.eval(`return window.innerWidth;`);
+    // Five small precision-touchpad-style deltas add up to one 50-unit step.
+    for (let i = 0; i < 5; i++) {
+      await app.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 300, y: 300, deltaX: 0, deltaY: -10, modifiers: 2 });
+    }
+    assert.equal(await app.waitFor(`return localStorage.getItem('mdview.zoom') === '1.1' ? '1.1' : null;`, 'one zoom step'), '1.1');
+    await sleep(800);
+    assert.equal(await app.eval(`return localStorage.getItem('mdview.zoom');`), '1.1', 'exactly one step');
+    // Only the app's zoom applied: 1.1x, not 1.1x on top of a WebView2 Ctrl+wheel zoom.
+    const w = await app.eval(`return window.innerWidth;`);
+    assert.ok(Math.abs(w100 / w - 1.1) < 0.03, `viewport ${w100} -> ${w}`);
+    await key(app, '0');
+  } finally { await app.close(); }
+});
+
+test('a web link opens in the default browser with that URL', { skip }, async () => {
+  const marker = `tcb-e2e-${Date.now()}`;
+  const url = `https://example.com/?${marker}`;
+  fs.writeFileSync(path.join(fixtures, 'web.md'), `# Web\n\n[site](${url})\n`);
+  const app = await openApp(path.join(fixtures, 'web.md'));
+  try {
+    await app.eval(`[...document.querySelectorAll('#preview a')].find(a => a.textContent === 'site').click();`);
+    let procs = [];
+    for (let i = 0; i < 40 && !procs.length; i++) { await sleep(500); procs = processesWith(marker); }
+    assert.ok(procs.length, 'no process was started with the URL');
+    // The app itself did not navigate away.
+    assert.match(await text(app, '#docTitle'), /web\.md/);
+    for (const line of procs) killTree(Number(line.split('|')[0]));
+  } finally { await app.close(); }
+});
+
+test('Ctrl+P opens the print dialog', { skip }, async () => {
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    await key(app, 'p');
+    assert.equal(uia('Print', '__exists__'), 'OK');
   } finally { await app.close(); }
 });

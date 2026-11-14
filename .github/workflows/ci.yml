@@ -142,6 +142,25 @@ jobs:
           Write-Host "shell open started: $($proc.CommandLine)"
           Stop-Process -Id $proc.ProcessId -Force
 
+      # The MSI installs per machine, puts tcb.exe in place, and uninstalls cleanly.
+      - name: MSI install and uninstall
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          Get-Process tcb -ErrorAction SilentlyContinue | Stop-Process -Force
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" | Select-Object -First 1
+          $log = Join-Path $env:RUNNER_TEMP "msi-install.log"
+          Write-Host "installing $($msi.Name)"
+          $p = Start-Process msiexec.exe -ArgumentList "/i `"$($msi.FullName)`" /qn /norestart /l*v `"$log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 40; Write-Error "msiexec /i exit $($p.ExitCode)"; exit 1 }
+          $exe = Get-ChildItem "$env:ProgramFiles\tcb","${env:ProgramFiles(x86)}\tcb" -Filter tcb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { Write-Error "tcb.exe not found under Program Files after MSI install"; exit 1 }
+          Write-Host "installed: $($exe.FullName) ($((Get-Item $exe.FullName).VersionInfo.ProductVersion))"
+          $u = Start-Process msiexec.exe -ArgumentList "/x `"$($msi.FullName)`" /qn /norestart" -Wait -PassThru
+          if ($u.ExitCode -ne 0) { Write-Error "msiexec /x exit $($u.ExitCode)"; exit 1 }
+          if (Test-Path $exe.FullName) { Write-Error "tcb.exe still present after MSI uninstall"; exit 1 }
+          Write-Host "uninstalled cleanly"
+
   ui-smoke:
     name: WebAssets smoke tests (headless Chromium)
     # Pinned: ubuntu-latest moved to 26.04, which Playwright's browser installer
