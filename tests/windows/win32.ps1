@@ -15,8 +15,14 @@ public static class TcbWin32 {
   [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, string l);
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-  public static string Text(IntPtr h) { var s = new StringBuilder(1024); GetWindowText(h, s, 1024); return s.ToString(); }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, StringBuilder l);
+  // WM_GETTEXT works across processes; GetWindowText does not for other processes' controls.
+  public static string Text(IntPtr h) { var s = new StringBuilder(1024); SendMessage(h, 0x000D, (IntPtr)1024, s); return s.ToString(); }
+  public static IntPtr ButtonByText(IntPtr dlg, string want) {
+    IntPtr found = IntPtr.Zero;
+    EnumChildWindows(dlg, (h, l) => { if (Cls(h) == "Button" && Text(h).Replace("&", "") == want) { found = h; return false; } return true; }, IntPtr.Zero);
+    return found;
+  }
   public static string Describe(IntPtr dlg) {
     var sb = new StringBuilder();
     EnumChildWindows(dlg, (h, l) => { var c = Cls(h); if (c == "Edit" || c == "Button" || c.StartsWith("ComboBox")) sb.AppendFormat("  {0} parent={1} text='{2}'\n", c, Cls(GetParent(h)), Text(h)); return true; }, IntPtr.Zero);
@@ -56,7 +62,15 @@ if ($Path) {
   Start-Sleep -Milliseconds 300
   $typed = [TcbWin32]::Text($edit)
   [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]1, [IntPtr]::Zero)   # IDOK
-  for ($i = 0; $i -lt 20 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  for ($i = 0; $i -lt 12 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  if ([TcbWin32]::IsWindow($dlg)) {
+    # The Save dialog ignores a posted IDOK; click its default button instead.
+    foreach ($label in @('Save', 'Open')) {
+      $btn = [TcbWin32]::ButtonByText($dlg, $label)
+      if ($btn -ne [IntPtr]::Zero) { [void][TcbWin32]::PostMessage($btn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero); break }   # BM_CLICK
+    }
+    for ($i = 0; $i -lt 20 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  }
   if ([TcbWin32]::IsWindow($dlg)) {
     Write-Output "STILLOPEN typed='$typed'"
     Write-Output ([TcbWin32]::Describe($dlg))
