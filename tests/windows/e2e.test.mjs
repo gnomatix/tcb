@@ -561,7 +561,11 @@ test('Ctrl+O opens a file and Ctrl+Shift+S saves to a new path through the nativ
     assert.equal(uia('Save As', '__exists__'), 'OK');
     assert.equal(win32('Save As', { filePath: dst }), 'OK');
     await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(dst))})
-      && document.getElementById('dirtyDot').hidden;`, 'save to the new path');
+      && document.getElementById('dirtyDot').hidden;`, 'save to the new path')
+      .catch(async (err) => {
+        const st = await app.eval(`return { title: document.getElementById('docTitle').textContent, dirty: !document.getElementById('dirtyDot').hidden };`).catch(() => null);
+        throw new Error(`${err.message}; app=${JSON.stringify(st)}; dst exists=${fs.existsSync(dst)}; fixtures=${JSON.stringify(fs.readdirSync(fixtures).filter((f) => f.startsWith('saved')))}`);
+      });
     const bytes = fs.readFileSync(dst, 'utf8');
     assert.ok(bytes.endsWith('\r\nsaved as'), JSON.stringify(bytes.slice(-20)));
     assert.ok(!/[^\r]\n/.test(bytes), 'CRLF kept in the new file');
