@@ -31,7 +31,8 @@ $WM_SETTEXT = 0x000C; $WM_COMMAND = 0x0111; $TDM_CLICK_BUTTON = 0x0400 + 102
 $deadline = (Get-Date).AddSeconds($Timeout)
 $dlg = [IntPtr]::Zero
 while ($dlg -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) {
-  $dlg = [TcbWin32]::FindWindow($null, $Title)
+  # [NullString]::Value, not $null: PowerShell would pass $null as "" (a class named "").
+  $dlg = [TcbWin32]::FindWindow([NullString]::Value, $Title)
   if ($dlg -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 300 }
 }
 if ($dlg -eq [IntPtr]::Zero) { Write-Output "NOWINDOW"; exit 2 }
