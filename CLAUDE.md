@@ -68,7 +68,7 @@ mise run dev                   # = cargo tauri dev   (debug, live reload)
 
 # Tests
 (cd src-tauri && cargo test --lib)        # Rust unit tests: markdown.rs, textfile.rs, lib.rs git/snapshot helpers
-node --test "tests/ui/*.test.js"          # Front-end smoke tests (headless Chromium, mock host) — needs playwright
+node --test "tests/ui/*.test.js"          # Front-end tests (headless Chromium; mock host + a fake Tauri host) — needs playwright
 node --test "tests/windows/*.test.mjs"    # Windows only: real tcb.exe on WebView2 over CDP (CI job bundle-windows)
 ```
 

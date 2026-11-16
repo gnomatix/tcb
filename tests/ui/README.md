@@ -14,3 +14,9 @@ and link routing in the preview (`window.tcbLinks.classifyLink` is exposed for t
 links are observed by stubbing `window.open`, which is what the mock host calls).
 They cannot exercise Tauri IPC commands, native file/save dialogs, pulldown-cmark rendering or
 feature detection (mock mode always reports no features), or Windows WebView2 behaviour.
+
+`tauri-host.test.js` instead injects a fake `window.__TAURI__` before `app.js` runs, so `app.js`
+uses its Tauri host (`makeTauriHost`): the fake records every `invoke()` call and serves two files,
+a version list and an updater. It covers save timing (typing during a save, `Ctrl+S` with no
+edits), resetting the version bar when another file is opened, shortcuts on non-Latin layouts,
+and the start-up update check (it waits for the 5 s check, so this file takes about 15 s).

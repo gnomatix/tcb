@@ -199,6 +199,12 @@
         const { ask } = window.__TAURI__.dialog;
         return await ask(message, opts);
       },
+      async checkForUpdate() {
+        // tauri-plugin-updater: tries each endpoint in tauri.conf.json in turn and returns
+        // an Update (version, currentVersion, downloadAndInstall) or null.
+        const updater = window.__TAURI__.updater;
+        return updater ? await updater.check() : null;
+      },
       async getVersionInfo(path) {
         return await invoke('get_version_info', { path });
       },
@@ -281,6 +287,9 @@
       async confirm(message) {
         return window.confirm(message);
       },
+      async checkForUpdate() {
+        return null;
+      },
       async getVersionInfo() {
         return null;
       },
@@ -335,6 +344,7 @@
     state.format = format || null;
     $editor.value = state.savedContent;
     setDirty(false);
+    resetVersionHistory();
     renderFileFormat();
     await applyFileFlavorPreference();   // adjust dropdown BEFORE render so badges use right flavor
     await renderPreview(state.savedContent);
@@ -448,6 +458,10 @@
   }
 
   async function save({ forcePrompt = false } = {}) {
+    // Nothing edited: do not rewrite the file. A plain Ctrl+S here would otherwise put back
+    // the loaded text over changes made on disk since (a git pull, another editor) and, for
+    // files with snapshots, add a duplicate that pushes older ones out of the 200-snapshot cap.
+    if (!forcePrompt && state.path && !state.isDirty) return;
     const content = $editor.value;
 
     // Flavor compatibility gate: if features are present that the target flavor
@@ -473,7 +487,8 @@
       state.path = result.path;
       state.savedContent = content;
       if (result.format) state.format = result.format;
-      setDirty(false);
+      // Typing can continue while the save is in flight: still dirty if the editor moved on.
+      setDirty($editor.value !== content);
       renderFileFormat();
       refreshVersionInfo();           // count + status may have changed.
     } catch (err) {
@@ -935,7 +950,12 @@
   //   Ctrl+= / Ctrl+- / Ctrl+0 → zoom in / out / reset (persisted)
   document.addEventListener('keydown', (e) => {
     const ctrl = e.ctrlKey || e.metaKey;
-    const key = e.key.toLowerCase();
+    // Non-Latin layouts (Cyrillic, Greek, ...) report the typed letter in e.key, so Ctrl+S
+    // arrives as Ctrl+ы: use the physical key then. Not with Alt held: AltGr reports
+    // Ctrl+Alt on Windows, and AltGr+letter types text such as ś that must not save.
+    const key = (!/^[\x20-\x7e]$/.test(e.key) && !e.altKey && /^Key[A-Z]$/.test(e.code))
+      ? e.code.slice(3).toLowerCase()
+      : e.key.toLowerCase();
     // AltGr reports ctrlKey on Windows; exclude it so AltGr-typed =/+/-/0 still insert text.
     if (ctrl && !e.altKey && (e.key === '=' || e.key === '+')) {
       e.preventDefault();
@@ -998,6 +1018,19 @@
     else await openVersionBar();
   }
 
+  /** Another file was loaded: drop the previous file's versions from the bar, so Restore can
+   *  never write one file's past version into another. Reloads the list if the bar is open. */
+  function resetVersionHistory() {
+    versionsCache = [];
+    versionContentCache = {};
+    $versionPicker.innerHTML = '<option value="__current__">Current (live)</option>';
+    $versionPicker.value = '__current__';
+    $versionMeta.textContent = '';
+    $restoreSelectedBtn.disabled = true;
+    $toggle.disabled = false;
+    if (!$versionBar.hidden) openVersionBar();
+  }
+
   async function openVersionBar() {
     $versionBar.hidden = false;
     $versionBarToggle.setAttribute('aria-pressed', 'true');
@@ -1010,8 +1043,10 @@
     }
     $versionPicker.innerHTML = '<option value="__current__">Current (live)</option><option disabled>Loading…</option>';
     $versionPicker.disabled = true;
+    const forPath = state.path;
     try {
-      const versions = await host.listVersions(state.path);
+      const versions = await host.listVersions(forPath);
+      if (state.path !== forPath) return;   // another file was opened meanwhile
       versionsCache = versions || [];
       versionContentCache = {};
       populatePicker(versionsCache);
@@ -1357,4 +1392,30 @@
   }).catch((err) => {
     console.error('[host:init] failed:', err);
   });
+
+  // Auto-update: one check per launch, a few seconds after start-up. The updater tries each
+  // endpoint in tauri.conf.json in turn; when none answers (offline, endpoint down) the check
+  // fails quietly. An update is offered only when there are no unsaved edits, and the editor
+  // is read-only while it downloads: on Windows the installer then exits the app.
+  setTimeout(checkForUpdate, 5000);
+  async function checkForUpdate() {
+    let update = null;
+    try { update = await host.checkForUpdate(); } catch (err) { console.warn('[update] check failed:', err); }
+    if (!update || state.isDirty) return;
+    const yes = await host.confirm(
+      `TCB, M.D. ${update.version} is available (this is ${update.currentVersion}).\n\n` +
+      'Install it now? The app closes while the installer runs.',
+      { title: 'Update available', kind: 'info' },
+    );
+    if (!yes || state.isDirty) return;
+    $editor.readOnly = true;
+    flashTitle(`Downloading ${update.version}…`);
+    try {
+      await update.downloadAndInstall();
+    } catch (err) {
+      console.error('[update] install failed:', err);
+      $editor.readOnly = false;
+      alert(`The update could not be installed:\n\n${err}`);
+    }
+  }
 })();
