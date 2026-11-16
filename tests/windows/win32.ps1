@@ -18,6 +18,26 @@ public static class TcbWin32 {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, StringBuilder l);
   // WM_GETTEXT works across processes; GetWindowText does not for other processes' controls.
   public static string Text(IntPtr h) { var s = new StringBuilder(1024); SendMessage(h, 0x000D, (IntPtr)1024, s); return s.ToString(); }
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  // Every visible top-level window of the process that owns hwnd: class, title, enabled.
+  public static string ProcessWindows(IntPtr hwnd) {
+    uint pid; GetWindowThreadProcessId(hwnd, out pid);
+    var sb = new StringBuilder();
+    EnumWindows((h, l) => {
+      uint p2; GetWindowThreadProcessId(h, out p2);
+      if (p2 == pid && IsWindowVisible(h)) {
+        var t = new StringBuilder(512); GetWindowText(h, t, 512);
+        sb.AppendFormat("  top-level {0} '{1}' enabled={2}\n", Cls(h), t, IsWindowEnabled(h));
+        if (h != hwnd) { EnumChildWindows(h, (c, l2) => { var cc = Cls(c); if (cc == "Static" || cc == "Button" || cc == "DirectUIHWND") { var ct = Text(c); if (ct.Length > 0) sb.AppendFormat("      {0} '{1}'\n", cc, ct); } return true; }, IntPtr.Zero); }
+      }
+      return true;
+    }, IntPtr.Zero);
+    return sb.ToString();
+  }
   public static IntPtr ButtonByText(IntPtr dlg, string want) {
     IntPtr found = IntPtr.Zero;
     EnumChildWindows(dlg, (h, l) => { if (Cls(h) == "Button" && Text(h).Replace("&", "") == want) { found = h; return false; } return true; }, IntPtr.Zero);
@@ -96,6 +116,7 @@ if ($Path) {
   if ([TcbWin32]::IsWindow($dlg)) {
     Write-Output "STILLOPEN typed='$typed'"
     Write-Output ([TcbWin32]::Describe($dlg))
+    Write-Output ([TcbWin32]::ProcessWindows($dlg))
     exit 5
   }
   Write-Output "OK"; exit 0
