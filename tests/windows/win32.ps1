@@ -2,8 +2,9 @@
 # Works without keyboard focus, which GitHub's Windows runners do not give native dialogs.
 #   -Title   exact top-level window title ("Unsaved changes", "Open", "Save As")
 #   -Choice  Yes / No for a message box or task dialog
-#   -Path    for a file dialog: text for the file-name box, then IDOK
-# Prints OK / NOWINDOW / NOEDIT / STILLOPEN (+ the dialog's controls) and exits 0 / 2 / 4 / 5.
+#   -Path    for a file dialog: typed into the file-name box, then IDOK
+# Prints OK / NOWINDOW / NOEDIT / STILLOPEN / OVERWRITEPROMPT (+ the dialog's controls) and
+# exits 0 / 2 / 4 / 5 / 6.
 param([Parameter(Mandatory)][string]$Title, [string]$Choice, [string]$Path, [int]$Timeout = 20)
 Add-Type -TypeDefinition @"
 using System; using System.Text; using System.Runtime.InteropServices;
@@ -49,6 +50,14 @@ public static class TcbWin32 {
     return sb.ToString();
   }
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", EntryPoint = "SendMessageW")] public static extern IntPtr SendMsg(IntPtr h, uint m, IntPtr w, IntPtr l);
+  // Replace an edit control's text the way typing does: select all, then one WM_CHAR per character.
+  // (The Save dialog keeps its own copy of the file name and ignores a WM_SETTEXT.)
+  public static void TypeInto(IntPtr edit, string text) {
+    SendMsg(edit, 0x00B1, IntPtr.Zero, (IntPtr)(-1));   // EM_SETSEL 0..end
+    SendMsg(edit, 0x0102, (IntPtr)0x08, (IntPtr)1);     // WM_CHAR backspace clears the selection
+    foreach (char ch in text) SendMsg(edit, 0x0102, (IntPtr)ch, (IntPtr)1);
+  }
   public static string Cls(IntPtr h) { var s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
   public static IntPtr FileNameEdit(IntPtr dlg) {
     IntPtr found = IntPtr.Zero;
@@ -78,28 +87,37 @@ if ($Path) {
     if ($edit -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 250 }
   }
   if ($edit -eq [IntPtr]::Zero) { Write-Output "NOEDIT"; exit 4 }
-  [void][TcbWin32]::SendMessage($edit, $WM_SETTEXT, [IntPtr]::Zero, $Path)
+  [TcbWin32]::TypeInto($edit, $Path)
   Start-Sleep -Milliseconds 300
+  if ([TcbWin32]::Text($edit) -ne $Path) { [void][TcbWin32]::SendMessage($edit, $WM_SETTEXT, [IntPtr]::Zero, $Path); Start-Sleep -Milliseconds 300 }
   $typed = [TcbWin32]::Text($edit)
   [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]1, [IntPtr]::Zero)   # IDOK
-  # Save dialogs can follow up with a "Confirm Save As" Yes/No box, which disables the dialog
-  # until answered. It is a task dialog (its text lives in a DirectUIHWND, and it ignores a
-  # posted WM_COMMAND IDYES), so answer Yes with TDM_CLICK_BUTTON, then BM_CLICK on its Yes button.
+  # A "Confirm Save As" box here is the overwrite prompt: the dialog took a file name that
+  # already exists (the pre-filled one), not $Path. Answer No so nothing is overwritten, and
+  # report it. It is a task dialog (its text lives in a DirectUIHWND, and it ignores a posted
+  # WM_COMMAND), so press No with TDM_CLICK_BUTTON, then BM_CLICK on its No button.
+  $overwritePrompt = $false
   for ($i = 0; $i -lt 16 -and [TcbWin32]::IsWindow($dlg); $i++) {
     $confirm = [TcbWin32]::FindWindow([NullString]::Value, 'Confirm Save As')
     if ($confirm -ne [IntPtr]::Zero) {
-      [void][TcbWin32]::PostMessage($confirm, $TDM_CLICK_BUTTON, [IntPtr]6, [IntPtr]::Zero)   # IDYES
+      $overwritePrompt = $true
+      [void][TcbWin32]::PostMessage($confirm, $TDM_CLICK_BUTTON, [IntPtr]7, [IntPtr]::Zero)   # IDNO
       Start-Sleep -Milliseconds 500
       if ([TcbWin32]::IsWindow($confirm)) {
-        $yes = [TcbWin32]::ButtonByText($confirm, 'Yes')
-        if ($yes -ne [IntPtr]::Zero) { [void][TcbWin32]::PostMessage($yes, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) }   # BM_CLICK
+        $no = [TcbWin32]::ButtonByText($confirm, 'No')
+        if ($no -ne [IntPtr]::Zero) { [void][TcbWin32]::PostMessage($no, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) }   # BM_CLICK
         Start-Sleep -Milliseconds 500
       }
-      if ([TcbWin32]::IsWindow($confirm)) {
-        [void][TcbWin32]::PostMessage($confirm, $WM_COMMAND, [IntPtr]6, [IntPtr]::Zero)   # IDYES, for a classic message box
-        Start-Sleep -Milliseconds 500
-      }
+      break
     } else { Start-Sleep -Milliseconds 250 }
+  }
+  if ($overwritePrompt) {
+    # Leave the dialog to the caller's cleanup; the run must not fall through to a click that
+    # would raise the same prompt again.
+    Write-Output "OVERWRITEPROMPT typed='$typed'"
+    Write-Output ([TcbWin32]::Describe($dlg))
+    [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]2, [IntPtr]::Zero)   # IDCANCEL
+    exit 6
   }
   if ([TcbWin32]::IsWindow($dlg)) {
     # The Save dialog ignores a posted IDOK; click its default button instead.
