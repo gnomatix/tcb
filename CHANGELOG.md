@@ -9,7 +9,8 @@ All notable changes to TCB, M.D. Versions follow semver; the Windows installer a
 - The app never checked for updates: the updater was configured but nothing called it, so
   no installed copy could update itself. It now checks once, a few seconds after start-up,
   and offers the new version (only when there are no unsaved edits). Accepting downloads
-  and runs the installer, which closes the app.
+  and runs the installer, which closes the app. Because earlier versions never checked, installs of
+  0.2.0–0.2.4 have to be updated to 0.2.5 by hand once.
 - Opening another file while a past version was selected in the version bar kept the old
   file's versions listed and Restore enabled, so Restore + Save could write one file's
   history into a different file; Edit stayed disabled. Loading a file now resets the bar.

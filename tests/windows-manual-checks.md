@@ -41,13 +41,18 @@ dialog ignores `WM_SETTEXT`), and prompts are answered with `TDM_CLICK_BUTTON` o
 ## Auto-update (`tauri-plugin-updater`, `release.yml`)
 
 v0.2.2 is the first release built with updater signatures; v0.2.3 adds the GitHub release
-manifest as a second endpoint. Both releases' installer signatures were verified against
-`plugins.updater.pubkey` in `tauri.conf.json`.
+manifest as a second endpoint. The signatures of every release since were verified against
+`plugins.updater.pubkey` in `tauri.conf.json` (v0.2.5: both installers, and the fallback
+endpoint serves its `latest.json`).
+
+Until 0.2.5 nothing in the app called the updater, so **0.2.0–0.2.4 never look for updates**:
+each of those installs has to get 0.2.5 by hand once. From 0.2.5 on, the app checks 5 s after
+start-up (the prompt and its conditions are covered by `tests/ui/tauri-host.test.js`).
 
 - [ ] `illumignoti.gnomatix.com` has a TXT record (`peer-auth=…`) but no A, AAAA, CNAME or
-      HTTPS record (checked 2026-11-13 via dns.google), so the updater's HTTPS request to
-      `https://illumignoti.gnomatix.com/latest.json` cannot connect. 0.2.0–0.2.2 list only that
-      endpoint and cannot find any update until the host serves (or redirects to) the latest
-      GitHub `latest.json`; otherwise update those installs by hand.
-- [ ] Install v0.2.3, publish any later release, and confirm the update is offered through the
-      GitHub fallback endpoint, downloads, and installs in passive mode.
+      HTTPS record (re-checked 2026-11-16 via dns.google), so that endpoint cannot connect and
+      the updater moves on to the GitHub manifest.
+- [ ] With 0.2.5 installed, publish a later release and confirm the "Update available" prompt
+      appears after start-up, and that accepting it downloads and installs in passive mode.
+- [ ] With 0.2.5 installed, opening and saving files shows no console window flash (git now
+      runs with `CREATE_NO_WINDOW`).
