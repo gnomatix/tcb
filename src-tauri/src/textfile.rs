@@ -164,8 +164,8 @@ pub fn normalize_newlines(text: &str) -> String {
 /// its working directory. A relative argument (`tcb notes.md` typed in a shell)
 /// must be resolved against **that** directory, not ours — otherwise the file is
 /// looked up in the wrong place and silently fails to open.
-pub fn resolve_path_arg(arg: &str, cwd: Option<&Path>) -> PathBuf {
-    let p = Path::new(arg);
+pub fn resolve_path_arg(arg: impl AsRef<Path>, cwd: Option<&Path>) -> PathBuf {
+    let p = arg.as_ref();
     if p.is_absolute() {
         return p.to_path_buf();
     }

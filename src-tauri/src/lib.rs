@@ -67,10 +67,12 @@ fn save_file(app: AppHandle, path: String, content: String, format: Option<TextF
     let format = format.unwrap_or_default();
     let bytes = textfile::encode(&content, format);
     std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {}: {}", path, e))?;
-    // If the file ISN'T in a git repo, take a local snapshot so we still have history.
+    // Unless git keeps this file's history (tracked in a work tree), take a local snapshot
+    // so it still has one: untracked or ignored files inside a repo, and files in a repo
+    // with no commits yet, need snapshots as much as files outside git.
     // Best-effort: a failed snapshot does not fail the save itself.
     let p = Path::new(&path);
-    if !is_inside_git(p) {
+    if !is_tracked_in_git(p) {
         if let Err(err) = snapshot_save_impl(&app, p, &content) {
             eprintln!("[snapshot] failed: {}", err);
         }
@@ -152,7 +154,7 @@ fn git_list_versions(dir: &Path, rel: &Path) -> Vec<VersionEntry> {
 fn git_show_file(dir: &Path, hash: &str, rel: &Path) -> Result<String, String> {
     let rel_s = rel.to_string_lossy().replace('\\', "/");
     let spec = format!("{}:{}", hash, rel_s);
-    let out = Command::new("git")
+    let out = command("git")
         .arg("-C").arg(dir)
         .args(["show", &spec])
         .output()
@@ -276,19 +278,37 @@ fn get_version_info(app: AppHandle, path: String) -> VersionInfo {
 // the file's own directory with a toplevel-relative path matched nothing for any
 // file below the repo root (empty history, "0 commits").
 
+/// A subprocess that never opens a console window. tcb.exe is a GUI-subsystem program, so
+/// on Windows every git / pandoc / typst run would otherwise flash one (several per open
+/// or save, from the git status and history helpers).
+fn command(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut c = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
 fn git_run(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let out = command("git").arg("-C").arg(dir).args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
-fn is_inside_git(path: &Path) -> bool {
-    let dir = path.parent().unwrap_or(path);
-    git_run(dir, &["rev-parse", "--is-inside-work-tree"])
-        .map(|s| s == "true")
-        .unwrap_or(false)
+/// True when git holds history for this file: it is in a work tree and in the index.
+/// Runs in the file's own folder with its bare name (a pathspec relative to that folder);
+/// unlike the history helpers this needs no toplevel, so it also works before the first
+/// commit, when `rev-parse --abbrev-ref HEAD` fails.
+fn is_tracked_in_git(path: &Path) -> bool {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return false };
+    let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
+    git_run(dir, &["ls-files", "--error-unmatch", "--", &name.to_string_lossy()]).is_some()
 }
 
 fn git_toplevel_and_branch(dir: &Path) -> Option<(PathBuf, String)> {
@@ -418,7 +438,7 @@ struct TypesettingTools {
 }
 
 fn binary_present(name: &str) -> bool {
-    Command::new(name)
+    command(name)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -437,7 +457,13 @@ fn detect_typesetting_tools() -> TypesettingTools {
 /// engine. Requires both `pandoc` and `typst` on PATH. Returns stderr on failure.
 #[tauri::command]
 fn export_typeset_pdf(input: String, output: String) -> Result<(), String> {
-    let out = Command::new("pandoc")
+    // Run from the document's folder: pandoc resolves relative image paths against its
+    // working directory, not against the input file.
+    let mut cmd = command("pandoc");
+    if let Some(dir) = Path::new(&input).parent().filter(|d| !d.as_os_str().is_empty()) {
+        cmd.current_dir(dir);
+    }
+    let out = cmd
         .arg(&input)
         .arg("-o").arg(&output)
         .arg("--pdf-engine=typst")
@@ -472,9 +498,12 @@ fn frontend_ready(window: WebviewWindow) -> Result<(), String> {
 }
 
 pub fn run() {
+    // Resolved against the working directory now: the front end derives the base folder
+    // for relative images and links from this path, so it must not stay relative.
+    let cwd = std::env::current_dir().ok();
     let launch_path = std::env::args_os()
         .nth(1)
-        .map(PathBuf::from)
+        .map(|arg| textfile::resolve_path_arg(arg, cwd.as_deref()))
         .filter(|p| p.is_file());
 
     tauri::Builder::default()
@@ -642,7 +671,15 @@ mod tests {
             eprintln!("skipping: not inside a git work tree");
             return;
         }
-        assert!(is_inside_git(&here.join("Cargo.toml")));
+        assert!(is_tracked_in_git(&here.join("Cargo.toml")));
+        // Inside the work tree but ignored (target/) or untracked: no git history, so the
+        // save path must take snapshots for it.
+        let ignored = here.join("target").join("tcb-untracked-probe.md");
+        std::fs::create_dir_all(ignored.parent().unwrap()).unwrap();
+        std::fs::write(&ignored, "x").unwrap();
+        assert!(!is_tracked_in_git(&ignored));
+        let _ = std::fs::remove_file(&ignored);
+        assert!(!is_tracked_in_git(&std::env::temp_dir().join("tcb-not-in-git.md")));
         let (top, _branch) = git_toplevel_and_branch(here).unwrap();
         let rel = path_relative_to(&here.join("Cargo.toml"), &top);
         assert_eq!(rel, Path::new("src-tauri/Cargo.toml"));
