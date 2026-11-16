@@ -653,6 +653,54 @@ test('a web link opens in the default browser with that URL', { skip }, async ()
   } finally { await app.close(); }
 });
 
+test('middle-click and Ctrl+click on a web link start nothing and keep the window on the document', { skip }, async () => {
+  const marker = `tcb-e2e-aux-${Date.now()}`;
+  fs.writeFileSync(path.join(fixtures, 'aux.md'), `# Aux\n\n[site](https://example.com/?${marker})\n`);
+  const app = await openApp(path.join(fixtures, 'aux.md'));
+  try {
+    const r = await app.eval(`const a = [...document.querySelectorAll('#preview a')].find(a => a.textContent === 'site');
+      const b = a.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 };`);
+    // Real input through WebView2 (not synthetic DOM events): middle button, then Ctrl (modifiers 2) + left.
+    for (const [button, modifiers] of [['middle', 0], ['left', 2]]) {
+      await app.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x, y: r.y, modifiers });
+      await app.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: r.x, y: r.y, button, clickCount: 1, modifiers });
+      await app.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: r.x, y: r.y, button, clickCount: 1, modifiers });
+    }
+    await sleep(5000);
+    assert.deepEqual(processesWith(marker), [], 'no process may be started with the URL');
+    const pages = (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page');
+    assert.equal(pages.length, 1, 'no extra WebView2 window: ' + JSON.stringify(pages.map((p) => p.url)));
+    assert.match(await text(app, '#docTitle'), /aux\.md/);
+    assert.equal(await app.eval(`return location.pathname.endsWith('index.html') || location.pathname === '/';`), true, 'the WebView did not navigate');
+  } finally { await app.close(); }
+});
+
+test('a mailto: link starts the registered mail handler with that address', { skip }, async () => {
+  // The runner has no mail client: register a stand-in handler for this user (cmd.exe running ping, so
+  // it stays up ~30 s; processesWith skips powershell.exe) with the mailto URL on its command line.
+  const marker = `tcb-e2e-mail-${Date.now()}`;
+  const reg = (args) => spawnSync('reg.exe', args, { encoding: 'utf8' });
+  const keyPath = 'HKCU\\Software\\Classes\\mailto';
+  reg(['add', keyPath, '/ve', '/d', 'URL:MailTo Protocol', '/f']);
+  reg(['add', keyPath, '/v', 'URL Protocol', '/d', '', '/f']);
+  reg(['add', `${keyPath}\\shell\\open\\command`, '/ve', '/d',
+    `"${process.env.SystemRoot}\\System32\\cmd.exe" /c ping -n 30 127.0.0.1 >nul & rem "%1"`, '/f']);
+  fs.writeFileSync(path.join(fixtures, 'mail.md'), `# Mail\n\n[write](mailto:someone@example.com?subject=${marker})\n`);
+  const app = await openApp(path.join(fixtures, 'mail.md'));
+  try {
+    await app.eval(`[...document.querySelectorAll('#preview a')].find(a => a.textContent === 'write').click();`);
+    let procs = [];
+    for (let i = 0; i < 40 && !procs.length; i++) { await sleep(500); procs = processesWith(marker); }
+    assert.ok(procs.length, 'no process was started with the mailto URL');
+    assert.ok(procs.some((l) => l.includes('mailto:someone@example.com')), procs.join('\n'));
+    assert.match(await text(app, '#docTitle'), /mail\.md/);
+    for (const line of procs) killTree(Number(line.split('|')[0]));
+  } finally {
+    await app.close();
+    reg(['delete', keyPath, '/f']);
+  }
+});
+
 test('Ctrl+P opens the print dialog', { skip }, async () => {
   const app = await openApp(path.join(REPO, 'test.md'));
   try {
