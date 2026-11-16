@@ -19,18 +19,17 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 | Second instance | `tcb.exe rel.md` started from another folder hands off and the running window opens that file |
 | Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; clicking a web link starts the default browser with that URL |
 | History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
-| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; `Ctrl+Shift+S` raises Save As; `Ctrl+P` raises Print |
+| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; entering a new path in the `Ctrl+Shift+S` Save As dialog writes the file there with its CRLF kept; `Ctrl+P` raises Print |
 | Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file |
 
 ## Still manual (choices inside native dialogs, and real input)
 
 GitHub's Windows runner gives native dialogs no focus or keyboard input; CI answers them with
-window messages (`tests/windows/win32.ps1`), which works for the prompt and Open but not yet
-for Save As.
+window messages (`tests/windows/win32.ps1`): the file name is typed with `WM_CHAR` (the Save
+dialog ignores `WM_SETTEXT`), and prompts are answered with `TDM_CLICK_BUTTON` or `WM_COMMAND`.
 
-- [ ] Completing Save As writes the file (CI raises the dialog and fills the path, but the
-      dialog does not accept it there); cancelling leaves the document dirty. New document →
-      `Ctrl+S` prompts Save As; `Ctrl+Shift+S` prompts with the current path pre-filled.
+- [ ] Cancelling Save As leaves the document dirty. New document → `Ctrl+S` prompts Save As;
+      `Ctrl+Shift+S` prompts with the current path pre-filled.
 - [ ] Dragging a `.md` file from Explorer onto the window opens it (with the unsaved-edits
       prompt first when dirty).
 - [ ] A `mailto:` link opens the default mail client (the runner has none); middle-click and
