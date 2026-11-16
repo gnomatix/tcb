@@ -82,7 +82,15 @@ if ($Path) {
   Start-Sleep -Milliseconds 300
   $typed = [TcbWin32]::Text($edit)
   [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]1, [IntPtr]::Zero)   # IDOK
-  for ($i = 0; $i -lt 12 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  # Save dialogs can follow up with a "Confirm Save As" Yes/No box, which disables the dialog
+  # until answered. Answer Yes.
+  for ($i = 0; $i -lt 16 -and [TcbWin32]::IsWindow($dlg); $i++) {
+    $confirm = [TcbWin32]::FindWindow([NullString]::Value, 'Confirm Save As')
+    if ($confirm -ne [IntPtr]::Zero) {
+      [void][TcbWin32]::PostMessage($confirm, $WM_COMMAND, [IntPtr]6, [IntPtr]::Zero)   # IDYES
+      Start-Sleep -Milliseconds 500
+    } else { Start-Sleep -Milliseconds 250 }
+  }
   if ([TcbWin32]::IsWindow($dlg)) {
     # The Save dialog ignores a posted IDOK; click its default button instead.
     foreach ($label in @('Save', 'Open')) {
