@@ -15,31 +15,28 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 | Rendering | raw HTML stays literal text (no `<b>`, no script, no double escaping); pagebreak `<hr>`; KaTeX; GFM flavor badges (`pagebreaks` allowed; `math`, `wikilinks`, `heading-attrs`, `definitions`, `frontmatter` flagged) |
 | Images | relative and absolute local images are inlined and decode; `../` escapes and web images are left alone |
 | Window | native title `name.md — TCB, M.D.`, with a leading `•` when dirty; `Ctrl+E` and dirty tracking |
-| Zoom | `Ctrl+=` changes the WebView2 zoom in the order pressed; the level is stored and restored after a relaunch; `Ctrl+0` resets |
+| Zoom | `Ctrl+=` changes the WebView2 zoom in the order pressed; the level is stored and restored after a relaunch; `Ctrl+0` resets; `Ctrl`+wheel deltas zoom one step per 50 units with no extra WebView2 zoom on top |
 | Second instance | `tcb.exe rel.md` started from another folder hands off and the running window opens that file |
-| Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; `openUrl` is permitted by `opener:default` |
+| Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; clicking a web link starts the default browser with that URL |
 | History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
-| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes" and the window stays open; a clean window closes without a prompt; `Ctrl+O` and `Ctrl+Shift+S` raise the native Open and Save As dialogs |
+| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; `Ctrl+Shift+S` raises Save As; `Ctrl+P` raises Print |
 | Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file |
 
 ## Still manual (choices inside native dialogs, and real input)
 
-GitHub's Windows runner does not let native dialogs take focus or keyboard input, so CI can
-show that each dialog appears but cannot press its buttons or pick a file.
+GitHub's Windows runner gives native dialogs no focus or keyboard input; CI answers them with
+window messages (`tests/windows/win32.ps1`), which works for the prompt and Open but not yet
+for Save As.
 
-- [ ] In the Open dialog (`Ctrl+O` or 📂), the filter offers `.md` / `.markdown` and picking a
-      file opens it.
-- [ ] New document → `Ctrl+S` prompts Save As; `Ctrl+Shift+S` prompts with the current path
-      pre-filled; saving writes the file; cancelling leaves the document dirty.
-- [ ] In the "Unsaved changes" prompt on close, **No** keeps the window and the edits, **Yes**
-      closes it.
+- [ ] Completing Save As writes the file (CI raises the dialog and fills the path, but the
+      dialog does not accept it there); cancelling leaves the document dirty. New document →
+      `Ctrl+S` prompts Save As; `Ctrl+Shift+S` prompts with the current path pre-filled.
 - [ ] Dragging a `.md` file from Explorer onto the window opens it (with the unsaved-edits
       prompt first when dirty).
-- [ ] Clicking a web link in the preview opens the default browser, and a `mailto:` link the
-      default mail client; middle-click and `Ctrl`+click do nothing.
-- [ ] `Ctrl+P` opens the native print dialog; `Ctrl+Shift+P` opens Print View.
-- [ ] `Ctrl`+mouse-wheel and a touchpad pinch zoom one step per gesture, with no extra
-      WebView2 zoom step.
+- [ ] A `mailto:` link opens the default mail client (the runner has none); middle-click and
+      `Ctrl`+click on a link do nothing.
+- [ ] Printing from the print dialog produces the expected pages; `Ctrl+Shift+P` Print View.
+- [ ] A touchpad pinch zooms one step per gesture (CI checks synthetic `Ctrl`+wheel deltas).
 - [ ] The `.msi` installs and uninstalls cleanly (the NSIS installer is checked in CI), and an
       interactive (non-silent) NSIS install shows the expected pages.
 
