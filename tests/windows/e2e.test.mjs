@@ -730,6 +730,22 @@ test('a mailto: link is handed to the Windows shell (mail handler, or the app pi
   }
 });
 
+test('Ctrl+Shift+P Print View paginates with paged.js on WebView2, one page per pagebreak', { skip }, async () => {
+  fs.writeFileSync(path.join(fixtures, 'pages.md'),
+    '# One\n\nfirst\n\n<!-- pagebreak -->\n\n# Two\n\nsecond\n\n<!-- pagebreak -->\n\n# Three\n\nthird\n');
+  const app = await openApp(path.join(fixtures, 'pages.md'));
+  try {
+    await key(app, 'p', { shift: true });
+    const status = await app.waitFor(`const t = document.getElementById('printViewStatus').textContent;
+      return /^\\d+ pages?$|^Failed/.test(t) ? t : null;`, 'Print View pagination', 30_000);
+    assert.equal(status, '3 pages');
+    assert.equal(await app.eval(`return document.querySelectorAll('#printPages .pagedjs_page').length;`), 3);
+    assert.equal(await app.eval(`return document.body.classList.contains('mode-print-view') && getComputedStyle(document.getElementById('printView')).display !== 'none';`), true);
+    await app.eval(`document.getElementById('printViewClose').click();`);
+    assert.equal(await app.eval(`return !document.body.classList.contains('mode-print-view') && document.querySelectorAll('#printPages .pagedjs_page').length === 0;`), true);
+  } finally { await app.close(); }
+});
+
 test('Ctrl+P opens the print dialog', { skip }, async () => {
   const app = await openApp(path.join(REPO, 'test.md'));
   try {
