@@ -1278,7 +1278,7 @@
       if (!proceed) return;
     }
     const fname = state.path.split(/[\\/]/).pop().replace(/\.(md|markdown)$/i, '') + '.pdf';
-    const defaultPath = state.path.replace(/[^\\/]+$/, fname);
+    const defaultPath = state.path.replace(/[^\\/]+$/, () => fname);   // function: no $-patterns from the name
     try {
       const outPath = await host.pickSavePdfPath(defaultPath);
       if (!outPath) return;
