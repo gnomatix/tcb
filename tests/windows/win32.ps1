@@ -3,9 +3,10 @@
 #   -Title   exact top-level window title ("Unsaved changes", "Open", "Save As")
 #   -Choice  Yes / No for a message box or task dialog
 #   -Path    for a file dialog: typed into the file-name box, then IDOK
+#   -Cancel  for a file dialog: print its file-name box as TEXT=..., then IDCANCEL
 # Prints OK / NOWINDOW / NOEDIT / STILLOPEN / OVERWRITEPROMPT (+ the dialog's controls) and
 # exits 0 / 2 / 4 / 5 / 6.
-param([Parameter(Mandatory)][string]$Title, [string]$Choice, [string]$Path, [int]$Timeout = 20)
+param([Parameter(Mandatory)][string]$Title, [string]$Choice, [string]$Path, [switch]$Cancel, [int]$Timeout = 20)
 Add-Type -TypeDefinition @"
 using System; using System.Text; using System.Runtime.InteropServices;
 public static class TcbWin32 {
@@ -79,6 +80,20 @@ while ($dlg -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) {
 }
 if ($dlg -eq [IntPtr]::Zero) { Write-Output "NOWINDOW"; exit 2 }
 Start-Sleep -Milliseconds 500   # let the dialog finish initialising its controls
+
+if ($Cancel) {
+  $edit = [IntPtr]::Zero
+  for ($i = 0; $i -lt 20 -and $edit -eq [IntPtr]::Zero; $i++) {
+    $edit = [TcbWin32]::FileNameEdit($dlg)
+    if ($edit -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 250 }
+  }
+  if ($edit -eq [IntPtr]::Zero) { Write-Output "NOEDIT"; exit 4 }
+  $shown = [TcbWin32]::Text($edit)
+  [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]2, [IntPtr]::Zero)   # IDCANCEL
+  for ($i = 0; $i -lt 20 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  if ([TcbWin32]::IsWindow($dlg)) { Write-Output "STILLOPEN TEXT=$shown"; exit 5 }
+  Write-Output "OK"; Write-Output "TEXT=$shown"; exit 0
+}
 
 if ($Path) {
   $edit = [IntPtr]::Zero

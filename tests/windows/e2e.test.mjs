@@ -172,6 +172,14 @@ function win32(title, { choice, filePath } = {}) {
   const out = (r.stdout || '').trim();
   return r.status === 0 && out === 'OK' ? 'OK' : `${out} (exit ${r.status}) ${(r.stderr || '').trim()}`;
 }
+/** Cancel a native file dialog; returns what its file-name box showed (see win32.ps1 -Cancel). */
+function win32Cancel(title) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(REPO, 'tests', 'windows', 'win32.ps1'), '-Title', title, '-Cancel'],
+    { encoding: 'utf8', timeout: 60_000 });
+  const lines = (r.stdout || '').trim().split(/\r?\n/);
+  if (r.status !== 0 || lines[0] !== 'OK') throw new Error(`${lines.join(' | ')} (exit ${r.status}) ${(r.stderr || '').trim()}`);
+  return (lines.find((l) => l.startsWith('TEXT=')) || 'TEXT=').slice(5);
+}
 /** Command lines of running processes whose command line contains `needle`. */
 function processesWith(needle) {
   const r = spawnSync('powershell.exe', ['-NoProfile', '-Command',
@@ -569,6 +577,42 @@ test('Ctrl+O opens a file and Ctrl+Shift+S saves to a new path through the nativ
     const bytes = fs.readFileSync(dst, 'utf8');
     assert.ok(bytes.endsWith('\r\nsaved as'), JSON.stringify(bytes.slice(-20)));
     assert.ok(!/[^\r]\n/.test(bytes), 'CRLF kept in the new file');
+  } finally { await app.close(); }
+});
+
+test('Ctrl+Shift+S offers the current file name, and cancelling leaves the document dirty and the file unchanged', { skip }, async () => {
+  const file = fresh('crlf.md');
+  const before = fs.readFileSync(file);
+  const app = await openApp(file);
+  try {
+    await app.eval(`const e = document.getElementById('editor'); e.value += '\\nnot saved'; e.dispatchEvent(new Event('input'));`);
+    await key(app, 's', { shift: true });
+    assert.equal(uia('Save As', '__exists__'), 'OK');
+    assert.equal(win32Cancel('Save As'), path.basename(file));
+    await sleep(1000);
+    assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'still dirty after cancel');
+    assert.ok((await text(app, '#docTitle')).includes(path.basename(file)));
+    assert.ok(fs.readFileSync(file).equals(before), 'file on disk unchanged');
+  } finally { await app.close(); }
+});
+
+test('a new document: Ctrl+S asks for a path (untitled.md), cancel keeps it, then saving writes it', { skip }, async () => {
+  const dst = path.join(fixtures, `new-doc-${Date.now()}.md`);
+  const app = await openApp(path.join(fixtures, 'does-not-exist.md'), { waitForLoad: false });
+  try {
+    await app.waitFor(`return document.querySelector('#preview h1')?.textContent === 'Welcome';`, 'welcome render');
+    await app.eval(`const e = document.getElementById('editor'); e.value = '# New doc\\n\\nbody\\n'; e.dispatchEvent(new Event('input'));`);
+    await key(app, 's');
+    assert.equal(uia('Save As', '__exists__'), 'OK');
+    assert.equal(win32Cancel('Save As'), 'untitled.md');
+    await sleep(1000);
+    assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'still dirty after cancel');
+    await key(app, 's');
+    assert.equal(uia('Save As', '__exists__'), 'OK');
+    assert.equal(win32('Save As', { filePath: dst }), 'OK');
+    await app.waitFor(`return document.getElementById('docTitle').textContent.includes(${JSON.stringify(path.basename(dst))})
+      && document.getElementById('dirtyDot').hidden;`, 'new document saved');
+    assert.equal(fs.readFileSync(dst, 'utf8'), '# New doc\n\nbody\n');
   } finally { await app.close(); }
 });
 
