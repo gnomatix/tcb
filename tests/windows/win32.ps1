@@ -69,6 +69,28 @@ if ($Path) {
       $btn = [TcbWin32]::ButtonByText($dlg, $label)
       if ($btn -ne [IntPtr]::Zero) { [void][TcbWin32]::PostMessage($btn, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero); break }   # BM_CLICK
     }
+    for ($i = 0; $i -lt 12 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  }
+  if ([TcbWin32]::IsWindow($dlg)) {
+    # Return in the file-name edit: the dialog treats it as its default (Save/Open) button.
+    [void][TcbWin32]::PostMessage($edit, 0x0100, [IntPtr]0x0D, [IntPtr]0x001C0001)   # WM_KEYDOWN VK_RETURN
+    [void][TcbWin32]::PostMessage($edit, 0x0102, [IntPtr]0x0D, [IntPtr]0x001C0001)   # WM_CHAR '\r'
+    [void][TcbWin32]::PostMessage($edit, 0x0101, [IntPtr]0x0D, [IntPtr]0xC01C0001)   # WM_KEYUP VK_RETURN
+    for ($i = 0; $i -lt 12 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
+  }
+  if ([TcbWin32]::IsWindow($dlg)) {
+    # Last resort: UI Automation Invoke on the Save / Open button.
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $AE = [System.Windows.Automation.AutomationElement]
+    $root = $AE::FromHandle($dlg)
+    foreach ($b in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)))) {
+      if (($b.Current.Name -replace '&', '') -in @('Save', 'Open')) {
+        try { $b.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() } catch { Write-Output "INVOKEFAILED $($_.Exception.Message)" }
+        break
+      }
+    }
     for ($i = 0; $i -lt 20 -and [TcbWin32]::IsWindow($dlg); $i++) { Start-Sleep -Milliseconds 250 }
   }
   if ([TcbWin32]::IsWindow($dlg)) {
