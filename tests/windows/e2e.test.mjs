@@ -46,9 +46,9 @@ function killTree(pid) {
 }
 
 /** Launch tcb.exe on `file` and return a CDP-backed handle to its WebView2 page. */
-async function openApp(file, { waitForLoad = true } = {}) {
+async function openApp(file, { waitForLoad = true, cwd } = {}) {
   const port = PORT;
-  const proc = spawn(APP, [file], { stdio: 'ignore' });
+  const proc = spawn(APP, [file], { stdio: 'ignore', cwd });
   let exited = null;
   proc.on('exit', (code) => { exited = code; });
 
@@ -304,6 +304,16 @@ test('local images are inlined; escaping and web images are left alone', { skip 
     assert.ok(by.web?.src.startsWith('https://example.com/'), JSON.stringify(imgs));
     // The inlined image actually decodes in WebView2.
     assert.ok(await app.waitFor(`return document.querySelector('#preview img[alt=local]').naturalWidth === 1;`, 'image decode'));
+  } finally { await app.close(); }
+});
+
+test('launched with a relative path, relative images still resolve against the document folder', { skip }, async () => {
+  // `tcb images.md` from a terminal in that folder: the launch path is made absolute, so the
+  // image base folder is the document's folder rather than "images.md" itself.
+  const app = await openApp('images.md', { cwd: fixtures });
+  try {
+    const src = await app.waitFor(`return document.querySelector('#preview img[alt=local]')?.getAttribute('src');`, 'local image');
+    assert.ok(src.startsWith('data:image/png;base64,'), src.slice(0, 40));
   } finally { await app.close(); }
 });
 
