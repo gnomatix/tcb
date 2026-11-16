@@ -83,12 +83,22 @@ if ($Path) {
   $typed = [TcbWin32]::Text($edit)
   [void][TcbWin32]::PostMessage($dlg, $WM_COMMAND, [IntPtr]1, [IntPtr]::Zero)   # IDOK
   # Save dialogs can follow up with a "Confirm Save As" Yes/No box, which disables the dialog
-  # until answered. Answer Yes.
+  # until answered. It is a task dialog (its text lives in a DirectUIHWND, and it ignores a
+  # posted WM_COMMAND IDYES), so answer Yes with TDM_CLICK_BUTTON, then BM_CLICK on its Yes button.
   for ($i = 0; $i -lt 16 -and [TcbWin32]::IsWindow($dlg); $i++) {
     $confirm = [TcbWin32]::FindWindow([NullString]::Value, 'Confirm Save As')
     if ($confirm -ne [IntPtr]::Zero) {
-      [void][TcbWin32]::PostMessage($confirm, $WM_COMMAND, [IntPtr]6, [IntPtr]::Zero)   # IDYES
+      [void][TcbWin32]::PostMessage($confirm, $TDM_CLICK_BUTTON, [IntPtr]6, [IntPtr]::Zero)   # IDYES
       Start-Sleep -Milliseconds 500
+      if ([TcbWin32]::IsWindow($confirm)) {
+        $yes = [TcbWin32]::ButtonByText($confirm, 'Yes')
+        if ($yes -ne [IntPtr]::Zero) { [void][TcbWin32]::PostMessage($yes, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) }   # BM_CLICK
+        Start-Sleep -Milliseconds 500
+      }
+      if ([TcbWin32]::IsWindow($confirm)) {
+        [void][TcbWin32]::PostMessage($confirm, $WM_COMMAND, [IntPtr]6, [IntPtr]::Zero)   # IDYES, for a classic message box
+        Start-Sleep -Milliseconds 500
+      }
     } else { Start-Sleep -Milliseconds 250 }
   }
   if ([TcbWin32]::IsWindow($dlg)) {
