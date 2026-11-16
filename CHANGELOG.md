@@ -3,6 +3,36 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## 0.2.5 — 2026-11-16
+
+### Fixed
+- The app never checked for updates: the updater was configured but nothing called it, so
+  no installed copy could update itself. It now checks once, a few seconds after start-up,
+  and offers the new version (only when there are no unsaved edits). Accepting downloads
+  and runs the installer, which closes the app.
+- Opening another file while a past version was selected in the version bar kept the old
+  file's versions listed and Restore enabled, so Restore + Save could write one file's
+  history into a different file; Edit stayed disabled. Loading a file now resets the bar.
+- Typing while a save was still in progress marked the document clean, so those keystrokes
+  could be lost on close without a prompt. It now stays dirty until they are saved.
+- `Ctrl+S` with no edits rewrote the file with the text loaded earlier, undoing changes
+  made on disk since (a `git pull`, another editor) and adding duplicate snapshots. It now
+  does nothing; `Ctrl+Shift+S` still prompts.
+- Files inside a git work tree that git does not track (untracked, ignored, or in a repo
+  with no commits) got no local snapshots and so had no history at all. Only tracked files
+  now rely on git alone.
+- Keyboard shortcuts did nothing on non-Latin layouts (Cyrillic, Greek, ...): they now use
+  the physical key when the layout reports a non-Latin letter. AltGr letters stay text.
+- Starting `tcb notes.md` from a terminal with a relative path broke relative images and
+  links; the launch path is now resolved against the working directory.
+- Typeset PDF export now runs pandoc in the document's folder, so relative images are found.
+- git, pandoc and typst now run without flashing a console window on Windows.
+
+### Added
+- Windows CI checks Save As completion and cancel, Ctrl+S on a new document, middle- and
+  Ctrl+click on links, the `mailto:` hand-off, Print View, the NSIS uninstaller, and the
+  MSI install and uninstall. Front-end tests now also run through the Tauri host code path.
+
 ## 0.2.4 — 2026-11-13
 
 ### Fixed
