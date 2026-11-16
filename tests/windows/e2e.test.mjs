@@ -588,7 +588,8 @@ test('Ctrl+Shift+S offers the current file name, and cancelling leaves the docum
     await app.eval(`const e = document.getElementById('editor'); e.value += '\\nnot saved'; e.dispatchEvent(new Event('input'));`);
     await key(app, 's', { shift: true });
     assert.equal(uia('Save As', '__exists__'), 'OK');
-    assert.equal(win32Cancel('Save As'), path.basename(file));
+    // Explorer hides known extensions by default, and the Markdown filter supplies .md.
+    assert.match(win32Cancel('Save As'), new RegExp(`^${path.basename(file, '.md')}(\\.md)?$`));
     await sleep(1000);
     assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'still dirty after cancel');
     assert.ok((await text(app, '#docTitle')).includes(path.basename(file)));
@@ -604,7 +605,7 @@ test('a new document: Ctrl+S asks for a path (untitled.md), cancel keeps it, the
     await app.eval(`const e = document.getElementById('editor'); e.value = '# New doc\\n\\nbody\\n'; e.dispatchEvent(new Event('input'));`);
     await key(app, 's');
     assert.equal(uia('Save As', '__exists__'), 'OK');
-    assert.equal(win32Cancel('Save As'), 'untitled.md');
+    assert.match(win32Cancel('Save As'), /^untitled(\.md)?$/);
     await sleep(1000);
     assert.equal(await app.eval(`return !document.getElementById('dirtyDot').hidden;`), true, 'still dirty after cancel');
     await key(app, 's');
@@ -691,7 +692,19 @@ test('a mailto: link starts the registered mail handler with that address', { sk
     await app.eval(`[...document.querySelectorAll('#preview a')].find(a => a.textContent === 'write').click();`);
     let procs = [];
     for (let i = 0; i < 40 && !procs.length; i++) { await sleep(500); procs = processesWith(marker); }
-    assert.ok(procs.length, 'no process was started with the mailto URL');
+    if (!procs.length) {
+      // Tell an app fault from a runner without a usable mailto handler: what the opener call
+      // returns, what the shell does with the same URL, and how mailto is registered.
+      const direct = await app.eval(`try { await window.__TAURI__.opener.openUrl('mailto:direct@example.com?subject=${marker}-direct'); return 'resolved'; } catch (e) { return 'rejected: ' + String(e); }`);
+      spawnSync('powershell.exe', ['-NoProfile', '-Command', `Start-Process 'mailto:shell@example.com?subject=${marker}-shell'`], { encoding: 'utf8', timeout: 30_000 });
+      await sleep(3000);
+      const q = (k) => (reg(['query', k, '/s']).stdout || '').trim();
+      throw new Error(['no process was started with the mailto URL',
+        `openUrl: ${direct}`, `after: ${JSON.stringify(processesWith(marker))}`,
+        `OpenWith: ${JSON.stringify(processesWith('OpenWith'))}`,
+        `HKCR\\mailto: ${q('HKCR\\mailto')}`,
+        `UserChoice: ${q('HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\mailto')}`].join('\n'));
+    }
     assert.ok(procs.some((l) => l.includes('mailto:someone@example.com')), procs.join('\n'));
     assert.match(await text(app, '#docTitle'), /mail\.md/);
     for (const line of procs) killTree(Number(line.split('|')[0]));
