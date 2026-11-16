@@ -19,7 +19,7 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 | Second instance | `tcb.exe rel.md` started from another folder hands off and the running window opens that file |
 | Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; clicking a web link starts the default browser with that URL; a real middle-click or `Ctrl`+click on it starts nothing, opens no second WebView2 window and does not navigate; a `mailto:` link is handed to the Windows shell (on the runner, which has no default mail app, the shell raises its app picker, as `Start-Process mailto:` does) |
 | History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
-| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; entering a new path in the `Ctrl+Shift+S` Save As dialog writes the file there with its CRLF kept; that dialog offers the current file name, and Cancel leaves the document dirty and the file unchanged; on a new document `Ctrl+S` offers `untitled.md`, Cancel keeps it dirty, and a typed path saves it; `Ctrl+P` raises Print |
+| Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; entering a new path in the `Ctrl+Shift+S` Save As dialog writes the file there with its CRLF kept; that dialog offers the current file name, and Cancel leaves the document dirty and the file unchanged; on a new document `Ctrl+S` offers `untitled.md`, Cancel keeps it dirty, and a typed path saves it; `Ctrl+P` raises Print; `Ctrl+Shift+P` Print View paginates with paged.js (one page per `<!-- pagebreak -->`) and its close button leaves it |
 | Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file; its `uninstall.exe /S` removes `tcb.exe`. The `.msi` installs silently (`/qn`) to the `INSTALLDIR` its log reports and `msiexec /x` removes it |
 
 ## Still manual (choices inside native dialogs, and real input)
@@ -32,7 +32,7 @@ dialog ignores `WM_SETTEXT`), and prompts are answered with `TDM_CLICK_BUTTON` o
       prompt first when dirty).
 - [ ] With a default mail app chosen, a `mailto:` link opens it with the address (CI checks the
       hand-off to the shell only).
-- [ ] Printing from the print dialog produces the expected pages; `Ctrl+Shift+P` Print View.
+- [ ] Printing from the print dialog produces the expected pages on paper or PDF.
 - [ ] A touchpad pinch zooms one step per gesture (CI checks synthetic `Ctrl`+wheel deltas).
 - [ ] An interactive (non-silent) NSIS or MSI install shows the expected pages, and the MSI
       default install folder on a machine that never had the NSIS build (CI reported
