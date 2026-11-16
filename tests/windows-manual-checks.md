@@ -20,7 +20,7 @@ in sync by a unit test) and drives it over the Chrome DevTools Protocol.
 | Links | `#heading` scrolls; `sub/b.md#details` opens and scrolls; a missing `.md` reports an error; image and `file:` links do nothing; clicking a web link starts the default browser with that URL |
 | History | a file in a git subfolder shows its commit count; restore with "Backup current first" adds one listed snapshot; three rapid saves outside git keep three snapshots (the 200-snapshot cap is a unit test, also run on Windows) |
 | Dialogs | closing a window with unsaved edits (WM_CLOSE, as the X button sends) raises "Unsaved changes"; **No** keeps the window and the edits, **Yes** closes it; a clean window closes without a prompt; picking a file in the `Ctrl+O` Open dialog opens it; entering a new path in the `Ctrl+Shift+S` Save As dialog writes the file there with its CRLF kept; `Ctrl+P` raises Print |
-| Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file |
+| Installer | the shipped NSIS setup installs silently (`/S`); `.md` is registered with an open command that runs the installed `tcb.exe`; opening a `.md` file through the shell starts it on that file; its `uninstall.exe /S` removes `tcb.exe`. The `.msi` installs silently (`/qn`) to the `INSTALLDIR` its log reports and `msiexec /x` removes it |
 
 ## Still manual (choices inside native dialogs, and real input)
 
@@ -36,8 +36,9 @@ dialog ignores `WM_SETTEXT`), and prompts are answered with `TDM_CLICK_BUTTON` o
       `Ctrl`+click on a link do nothing.
 - [ ] Printing from the print dialog produces the expected pages; `Ctrl+Shift+P` Print View.
 - [ ] A touchpad pinch zooms one step per gesture (CI checks synthetic `Ctrl`+wheel deltas).
-- [ ] The `.msi` installs and uninstalls cleanly (the NSIS installer is checked in CI), and an
-      interactive (non-silent) NSIS install shows the expected pages.
+- [ ] An interactive (non-silent) NSIS or MSI install shows the expected pages, and the MSI
+      default install folder on a machine that never had the NSIS build (CI reported
+      `%LOCALAPPDATA%\tcb\` after the NSIS build had been installed and removed).
 
 ## Auto-update (`tauri-plugin-updater`, `release.yml`)
 
