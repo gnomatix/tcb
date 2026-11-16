@@ -676,7 +676,7 @@ test('middle-click and Ctrl+click on a web link start nothing and keep the windo
   } finally { await app.close(); }
 });
 
-test('a mailto: link starts the registered mail handler with that address', { skip }, async () => {
+test('a mailto: link is handed to the Windows shell (mail handler, or the app picker when none is chosen)', { skip }, async () => {
   // The runner has no mail client: register a stand-in handler for this user (cmd.exe running ping, so
   // it stays up ~30 s; processesWith skips powershell.exe) with the mailto URL on its command line.
   const marker = `tcb-e2e-mail-${Date.now()}`;
@@ -688,10 +688,26 @@ test('a mailto: link starts the registered mail handler with that address', { sk
     `"${process.env.SystemRoot}\\System32\\cmd.exe" /c ping -n 30 127.0.0.1 >nul & rem "%1"`, '/f']);
   fs.writeFileSync(path.join(fixtures, 'mail.md'), `# Mail\n\n[write](mailto:someone@example.com?subject=${marker})\n`);
   const app = await openApp(path.join(fixtures, 'mail.md'));
+  const pickerPids = () => processesWith('OpenWith.exe').map((l) => Number(l.split('|')[0]));
+  const before = new Set(pickerPids());
   try {
     await app.eval(`[...document.querySelectorAll('#preview a')].find(a => a.textContent === 'write').click();`);
+    // Windows runs the mailto handler only once the user has chosen a default mail app (the
+    // hash-protected UserChoice key, which a test cannot set); until then the shell raises its
+    // "How do you want to open this?" picker (OpenWith.exe). Either one shows the app handed the
+    // URL to the shell, as Start-Process 'mailto:...' does on the same machine.
     let procs = [];
-    for (let i = 0; i < 40 && !procs.length; i++) { await sleep(500); procs = processesWith(marker); }
+    let picker = [];
+    for (let i = 0; i < 40 && !procs.length && !picker.length; i++) {
+      await sleep(500);
+      procs = processesWith(marker);
+      picker = pickerPids().filter((p) => !before.has(p));
+    }
+    for (const pid of picker) killTree(pid);
+    if (picker.length && !procs.length) {
+      assert.match(await text(app, '#docTitle'), /mail\.md/);
+      return;
+    }
     if (!procs.length) {
       // Tell an app fault from a runner without a usable mailto handler: what the opener call
       // returns, what the shell does with the same URL, and how mailto is registered.
