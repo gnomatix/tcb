@@ -3,6 +3,17 @@
 All notable changes to TCB, M.D. Versions follow semver; the Windows installer and
 `tcb.exe` for each tag are attached to the GitHub Release produced by `release.yml`.
 
+## 0.2.6 — 2026-11-17
+
+### Fixed
+- Typeset PDF export: a document whose name contains `$&`, `$1` or similar offered a mangled
+  default PDF name (e.g. `a$&b.md` gave `aa$&b.mdb.pdf`); it now offers `a$&b.pdf`.
+
+### Added
+- Windows CI checks that the real updater runs on WebView2, reaches the GitHub release manifest
+  past the unreachable first endpoint, and offers nothing when the app is current; and that a
+  relative launch path still resolves relative images.
+
 ## 0.2.5 — 2026-11-16
 
 ### Fixed
