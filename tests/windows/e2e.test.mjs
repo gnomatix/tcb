@@ -756,6 +756,24 @@ test('Ctrl+Shift+P Print View paginates with paged.js on WebView2, one page per 
   } finally { await app.close(); }
 });
 
+test('the updater runs on WebView2: it reaches the GitHub manifest and offers nothing when current', { skip }, async () => {
+  // tauri.conf.json lists illumignoti.gnomatix.com first (no address record) and the GitHub release
+  // manifest second; the plugin tries them in order. This build's version is the released one (or newer
+  // before a release), so check() must resolve to null, not throw, and no "Update available" prompt appears.
+  const app = await openApp(path.join(REPO, 'test.md'));
+  try {
+    const r = await app.eval(`try {
+        const u = await window.__TAURI__.updater.check({ timeout: 30000 });
+        return { ok: true, update: u ? { version: u.version, current: u.currentVersion } : null };
+      } catch (e) { return { ok: false, error: String(e) }; }`);
+    assert.equal(r.ok, true, 'check() failed: ' + r.error);
+    assert.equal(r.update, null, 'unexpected update offered: ' + JSON.stringify(r.update));
+    // The start-up check (5 s after launch) must not have raised a prompt either.
+    await sleep(3000);
+    assert.notEqual(uia('Update available', '__exists__'), 'OK', 'an update prompt appeared for the current version');
+  } finally { await app.close(); }
+});
+
 test('Ctrl+P opens the print dialog', { skip }, async () => {
   const app = await openApp(path.join(REPO, 'test.md'));
   try {
