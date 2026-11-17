@@ -32,4 +32,3 @@ desktop.ini
 # === Editor / tooling / local state — not for a public repo ===
 .vscode/
 .claude/
-.beads/
